@@ -7,7 +7,8 @@ from utils import transformar_relatorio, exportar_para_docx
 
 usuarios_autorizados = {
     "yan": "1234",
-    "cliente1": "senha123"
+    "cliente1": "senha123",
+    "Dolorice20": "Rebeca10"
 }
 
 # Controle de sessão
