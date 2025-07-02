@@ -21,10 +21,13 @@ if not st.session_state.autenticado:
     usuario = st.text_input("Usuário")
     senha = st.text_input("Senha", type="password")
 
-    if st.button("Entrar"):
+    login_botao = st.button("Entrar")
+
+    if login_botao:
         if usuario in usuarios_autorizados and senha == usuarios_autorizados[usuario]:
+            st.success("✅ Login bem-sucedido! Recarregando...")
             st.session_state.autenticado = True
-            st.experimental_rerun()
+            st.stop()  # Para a execução aqui, no lugar de forçar um rerun
         else:
             st.error("❌ Usuário ou senha inválidos.")
 
@@ -39,7 +42,9 @@ elif st.session_state.autenticado:
     st.sidebar.success("🔓 Autenticado")
     if st.sidebar.button("Sair"):
         st.session_state.autenticado = False
-        st.experimental_rerun()
+        st.session_state.autenticado = False
+        st.stop()
+
 
     # Logo (opcional)
     try:
