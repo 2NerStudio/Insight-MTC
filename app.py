@@ -42,7 +42,7 @@ elif st.session_state.autenticado:
     st.sidebar.success("🔓 Autenticado")
     if st.sidebar.button("Sair"):
         st.session_state.autenticado = False
-        st.experimental_rerun()
+        st.rerun()
 
     # Logo (opcional)
     try:
