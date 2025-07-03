@@ -1,4 +1,5 @@
 import streamlit as st
+from extrair_dados import extrair_dados_do_pdf
 from utils import transformar_relatorio, exportar_para_docx
 
 # ========================================
@@ -70,7 +71,22 @@ elif st.session_state.autenticado:
             st.warning("⚠️ Envie o relatório original.")
         else:
             with st.spinner("Processando..."):
-                texto_transformado = transformar_relatorio(arquivo, nome_terapeuta, registro_terapeuta)
+                if arquivo.name.endswith(".pdf"):
+                    dados = extrair_dados_do_pdf(arquivo)
+
+                    st.write("🧪 Dados extraídos do PDF:")
+                    st.write(dados)  # (Apenas para debug)
+
+                    # Aqui você pode passar os dados para outra função, ou gerar o .docx com eles
+                    texto_final = ""
+                    for d in dados:
+                        texto_final += f"{d['item']}: {d['valor']} (Normal: {d['intervalo']})\n"
+                        texto_final += f"Conselho: {d['conselho']}\n\n"
+
+                    texto_transformado = texto_final + f"\n---\nRelatório elaborado por {nome_terapeuta} — Registro: {registro_terapeuta}"
+
+                else:
+                    texto_transformado = transformar_relatorio(arquivo, nome_terapeuta, registro_terapeuta)
 
             st.success("✅ Relatório gerado com sucesso!")
             buffer_docx = exportar_para_docx(texto_transformado)
