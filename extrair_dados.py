@@ -1,6 +1,7 @@
 import pdfplumber
 
 def extrair_dados_do_pdf(arquivo_streamlit):
+    import pdfplumber
     dados_extraidos = []
 
     with pdfplumber.open(arquivo_streamlit) as pdf:
@@ -8,10 +9,15 @@ def extrair_dados_do_pdf(arquivo_streamlit):
             tabelas = pagina.extract_tables()
             for tabela in tabelas:
                 for linha in tabela:
-                    if linha[0] == "Item" or None in linha:
+                    # Ignora cabeçalho ou linhas incompletas
+                    if linha is None or len(linha) != 4:
                         continue
 
                     item, intervalo, valor, conselho = linha
+
+                    # Ignora linhas que não são dados válidos
+                    if item.strip().lower() == "item":
+                        continue
 
                     dados_extraidos.append({
                         "item": item.strip(),
