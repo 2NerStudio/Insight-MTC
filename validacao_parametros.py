@@ -133,13 +133,21 @@ def extrair_valores_do_pdf(caminho_pdf):
     resultados = {}
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
-            # Extrai tabelas mantendo o layout vertical
+            # Configurações para extração de tabelas
             settings = {
                 "vertical_strategy": "text", 
                 "horizontal_strategy": "text",
-                "keep_blank_chars": True
+                "explicit_vertical_lines": [],
+                "explicit_horizontal_lines": [],
+                "snap_tolerance": 3,
+                "join_tolerance": 3,
+                "edge_min_length": 3,
+                "min_words_vertical": 1,
+                "min_words_horizontal": 1
             }
-            tabelas = page.extract_tables(settings)
+            
+            # Extrai tabelas com as configurações
+            tabelas = page.extract_tables(table_settings=settings)
             
             for tabela in tabelas:
                 for linha in tabela:
