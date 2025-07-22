@@ -1,29 +1,38 @@
 import pdfplumber
 
 def extrair_dados_do_pdf(arquivo_streamlit):
-    import pdfplumber
     dados_extraidos = []
 
     with pdfplumber.open(arquivo_streamlit) as pdf:
         for pagina in pdf.pages:
             tabelas = pagina.extract_tables()
             for tabela in tabelas:
+                sistema_atual = None
                 for linha in tabela:
-                    # Ignora cabeçalho ou linhas incompletas
-                    if linha is None or len(linha) != 4:
+                    # pula linhas vazias ou não-tabelares
+                    if not linha or all((cell is None or cell.strip()=="") for cell in linha):
                         continue
 
-                    item, intervalo, valor, conselho = linha
+                    # garante pelo menos 5 colunas
+                    linha = (linha + [""]*5)[:5]
+                    sistema, item, intervalo, valor, conselho = [ (c or "").strip() for c in linha ]
 
-                    # Ignora linhas que não são dados válidos
-                    if item.strip().lower() == "item":
+                    # se a célula 'Sistema' estiver preenchida, definimos o contexto
+                    if sistema and not sistema.lower().startswith("sistema"):
+                        sistema_atual = sistema
+
+                    # pula cabeçalhos
+                    if item.lower().startswith("item"):
+                        continue
+                    # pula linhas sem item
+                    if not item:
                         continue
 
                     dados_extraidos.append({
-                        "item": item.strip(),
-                        "intervalo": intervalo.strip(),
-                        "valor": valor.strip(),
-                        "conselho": conselho.strip()
+                        "sistema": sistema_atual,
+                        "item": item,
+                        "intervalo": intervalo,
+                        "valor": valor,
+                        "conselho": conselho
                     })
-
     return dados_extraidos
