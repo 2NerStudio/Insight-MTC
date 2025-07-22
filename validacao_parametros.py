@@ -127,52 +127,32 @@ PARAMETROS = {
 
 def extrair_valores_do_pdf(caminho_pdf):
     """
-    Lê o PDF e retorna dict { item: valor_str } usando
-    a 2ª coluna (Item de Teste) e a 4ª coluna (Valor de Medição Real).
+    Extrai APENAS os valores da 4ª coluna (Valor Real) na ordem em que aparecem,
+    e vincula aos parâmetros na mesma ordem do dicionário PARAMETROS.
     """
-    resultados = {}
+    valores_reais = []
+    
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
-            # Configurações para extração de tabelas
-            settings = {
-                "vertical_strategy": "text", 
-                "horizontal_strategy": "text",
-                "explicit_vertical_lines": [],
-                "explicit_horizontal_lines": [],
-                "snap_tolerance": 3,
-                "join_tolerance": 3,
-                "edge_min_length": 3,
-                "min_words_vertical": 1,
-                "min_words_horizontal": 1
-            }
-            
-            # Extrai tabelas com as configurações
-            tabelas = page.extract_tables(table_settings=settings)
+            # Extrai todas as tabelas da página
+            tabelas = page.extract_tables()
             
             for tabela in tabelas:
                 for linha in tabela:
-                    # Verifica se a linha tem pelo menos 4 colunas
-                    if len(linha) < 4:
-                        continue
-                    
-                    # Pega as colunas relevantes
-                    item = (linha[1] or "").strip()
-                    valor = (linha[3] or "").strip()
-                    
-                    # Ignora cabeçalhos e linhas vazias
-                    if not item or item.lower() in ["item de teste", "sistema", "---"]:
-                        continue
-                    
-                    # Limpa valores quebrados por múltiplas linhas
-                    item = " ".join(item.split())
-                    valor = " ".join(valor.split())
-                    
-                    # Substitui vírgula por ponto para decimal
-                    valor = valor.replace(",", ".")
-                    
-                    # Adiciona ao dicionário se tiver valor numérico
-                    if valor.replace(".", "").isdigit():
-                        resultados[item] = valor
+                    # Pega a 4ª coluna (índice 3) se existir
+                    if len(linha) >= 4:
+                        valor = linha[3].strip().replace(",", ".")
+                        if valor.replace(".", "", 1).isdigit():
+                            valores_reais.append(float(valor))
+    
+    # Vincula os valores aos parâmetros na mesma ordem
+    parametros_ordenados = list(PARAMETROS.keys())
+    resultados = {}
+    
+    for i, valor in enumerate(valores_reais):
+        if i < len(parametros_ordenados):
+            param = parametros_ordenados[i]
+            resultados[param] = valor
     
     return resultados
 
