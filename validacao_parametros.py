@@ -68,4 +68,9 @@ def gerar_relatorio_anomalias(pdf_path: str, terapeuta: str, registro: str, outp
         f.write(buffer.read())
     print(f"✅ Relatório gerado: {output_path}")
 
-
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) != 4:
+        print("Uso: python validacao_parametros.py <arquivo.pdf> \"Nome\" \"Registro\"")
+        sys.exit(1)
+    gerar_relatorio_anomalias(sys.argv[1], sys.argv[2], sys.argv[3])

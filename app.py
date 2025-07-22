@@ -1,6 +1,6 @@
 import streamlit as st
 from extrair_dados import extrair_valores_apenas
-from validacao_parametros import validar_valores, gerar_relatorio_anomalias  # importamos a geração de docx
+from validacao_parametros import validar_valores
 from utils import exportar_para_docx
 
 # ========================================
@@ -57,10 +57,8 @@ if st.button("⚙️ Validar Parâmetros"):
         st.warning("⚠️ Envie o relatório original.")
     else:
         with st.spinner("🔍 Extraindo e validando..."):
-            # 1) extrai apenas os valores
             valores = extrair_valores_apenas(arquivo)
-            # 2) filtra os itens fora do normal
-            anomalias = validar_valores(valores)
+            anomalias, faltantes = validar_valores(valores)
 
         if not anomalias:
             st.success("🎉 Todos os parâmetros estão dentro do intervalo normal.")
@@ -68,21 +66,33 @@ if st.button("⚙️ Validar Parâmetros"):
             st.error(f"⚠️ Encontradas {len(anomalias)} anomalias:")
             for a in anomalias:
                 st.markdown(
-                    f"- **{a['item']}**: {a['valor_real']}  "
+                    f"- **{a['item']}**: {a['valor_real']} "
                     f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
                 )
 
-            # 3) gerar o .docx com anomalias e oferecer download
+            # Gerar .docx com os dados
             texto = f"Relatório de Anomalias\nTerapeuta: {nome_terapeuta} | Registro: {registro_terapeuta}\n\n"
             for a in anomalias:
                 texto += (
                     f"• {a['item']}: {a['valor_real']} "
                     f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})\n"
                 )
+
+            if faltantes:
+                texto += "\nItens não avaliados (parâmetros não definidos):\n"
+                for item in faltantes:
+                    texto += f"- {item}\n"
+
             buffer = exportar_para_docx(texto)
+
             st.download_button(
                 "⬇️ Baixar relatório de anomalias (.docx)",
                 data=buffer,
                 file_name="relatorio_anomalias.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
+
+        if faltantes:
+            st.warning("⚠️ Itens extraídos sem parâmetros definidos:")
+            for item in faltantes:
+                st.write(f"- {item}")
