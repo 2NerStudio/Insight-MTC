@@ -1,53 +1,69 @@
 import streamlit as st
-import tempfile, os
-from validacao_parametros import gerar_relatorio_pdf_regex
+import tempfile
+import os
+from validacao_parametros import gerar_relatorio
 
-# — Login simples —
-usuarios = {"yan":"1234","cliente1":"senha123","Dolorice20":"Rebeca10"}
-if "auth" not in st.session_state: st.session_state.auth=False
+# ——— Login simples ———
+USUARIOS = {"yan": "1234", "cliente1": "senha123", "Dolorice20": "Rebeca10"}
+if "autenticado" not in st.session_state:
+    st.session_state.autenticado = False
 
-if not st.session_state.auth:
-    st.set_page_config(page_title="Login", layout="centered")
-    st.title("🔐 Login")
-    u=st.text_input("Usuário"); p=st.text_input("Senha", type="password")
+if not st.session_state.autenticado:
+    st.set_page_config(page_title="Login - MTC Insight", layout="centered")
+    st.title("🔐 Área de Login")
+    usuario = st.text_input("Usuário")
+    senha = st.text_input("Senha", type="password")
     if st.button("Entrar"):
-        if usuarios.get(u)==p:
-            st.session_state.auth=True; st.experimental_rerun()
+        if USUARIOS.get(usuario) == senha:
+            st.session_state.autenticado = True
+            st.experimental_rerun()
         else:
-            st.error("Credenciais inválidas")
+            st.error("❌ Usuário ou senha inválidos.")
     st.stop()
 
-# — App principal —
-st.set_page_config(page_title="MTC Insight", layout="centered")
+# ——— App principal ———
+st.set_page_config(page_title="MTC Insight Pro", layout="centered", page_icon="🌿")
 if st.sidebar.button("Sair"):
-    st.session_state.auth=False; st.experimental_rerun()
+    st.session_state.autenticado = False
+    st.experimental_rerun()
 
 st.title("🌿 MTC Insight Pro")
-st.caption("Extração por Regex e Validação de Intervalos")
+st.caption("Extração por Regex e Validação de Anomalias")
 
-# dados do terapeuta
-nome = st.text_input("Nome do Terapeuta")
-reg  = st.text_input("Registro Profissional")
+# Informações do terapeuta
+st.subheader("🧑‍⚕️ Informações do Terapeuta")
+nome_terapeuta = st.text_input("Nome completo do terapeuta")
+registro_terapeuta = st.text_input("Registro profissional (CRF/CRTH)")
 
-# upload
-arquivo = st.file_uploader("Envie o relatório (.pdf)", type="pdf")
+# Upload do PDF
+st.subheader("📎 Upload do Relatório Original")
+arquivo = st.file_uploader("Envie o arquivo .pdf", type="pdf")
 
-if st.button("⚙️ Validar (Regex)"):
-    if not nome or not reg:
-        st.warning("Preencha nome e registro")
+# Botão de geração
+if st.button("⚙️ Gerar Relatório de Anomalias"):
+    if not nome_terapeuta or not registro_terapeuta:
+        st.warning("⚠️ Preencha as informações do terapeuta.")
     elif not arquivo:
-        st.warning("Envie o PDF")
+        st.warning("⚠️ Faça upload do relatório original.")
     else:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        tmp.write(arquivo.read()); tmp.close()
+        with st.spinner("🔍 Processando..."):
+            # Salva temporariamente
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+            tmp.write(arquivo.read())
+            tmp.close()
 
-        out = gerar_relatorio_pdf_regex(tmp.name, nome, reg,
-               os.path.join(tempfile.gettempdir(),"relatorio_regex.docx"))
+            # Gera o relatório usando o script regex
+            output_path = os.path.join(tempfile.gettempdir(), "relatorio_anomalias.docx")
+            gerar_relatorio(tmp.name, nome_terapeuta, registro_terapeuta, output_path)
 
-        st.success("✅ Relatório gerado!")
-        with open(out,"rb") as f:
-            st.download_button("⬇️ Baixar .docx", f.read(),
-                file_name="relatorio_regex.docx",
+        st.success("✅ Relatório gerado com sucesso!")
+        with open(output_path, "rb") as f:
+            st.download_button(
+                "⬇️ Baixar Relatório (.docx)",
+                data=f.read(),
+                file_name="relatorio_anomalias.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
+
+        # Limpa o arquivo temporário
         os.unlink(tmp.name)
