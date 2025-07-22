@@ -1,4 +1,6 @@
 import pdfplumber
+from extrair_dados import extrair_dados_do_pdf
+from parametros import PARAMETROS
 
 def extrair_dados_do_pdf(arquivo_streamlit):
     dados_extraidos = []
@@ -36,3 +38,22 @@ def extrair_dados_do_pdf(arquivo_streamlit):
                         "conselho": conselho
                     })
     return dados_extraidos
+
+def extrair_valores_apenas(arquivo_streamlit):
+    """
+    Retorna um dict { item: valor_str } apenas para os parâmetros listados em PARAMETROS,
+    extraindo via extrair_dados_do_pdf().
+    """
+    raw = extrair_dados_do_pdf(arquivo_streamlit)
+    resultados = {}
+    for param in PARAMETROS:
+        # procura a primeira ocorrência exata de param em raw
+        for linha in raw:
+            if linha["item"] == param:
+                # normaliza a vírgula decimal
+                resultados[param] = linha["valor"].strip()
+                break
+        else:
+            # se não encontrou, coloca vazio ou None
+            resultados[param] = None
+    return resultados

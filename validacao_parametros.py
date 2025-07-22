@@ -1,47 +1,30 @@
-def checar_parametro(item, valor_min, valor_max, valor_real):
+# validacao_parametros.py
+
+from parametros import PARAMETROS_NORMAIS
+
+def validar_registro(registro):
     """
-    Verifica se o valor está dentro do intervalo normal.
-    Retorna um dicionário com status e dados.
+    Dado um registro com chaves:
+      registro['item'], registro['valor'], registro['intervalo'], registro['conselho'], ...
+    Retorna o registro se estiver fora do normal, ou None caso esteja normal.
     """
+    nome = registro["item"]
+    valor_str = registro["valor"].replace(",", ".").strip()
     try:
-        valor_real = float(valor_real)
-        valor_min = float(valor_min)
-        valor_max = float(valor_max)
-    except ValueError:
-        return {
-            "item": item,
-            "status": "Erro",
-            "detalhe": "Valores inválidos"
-        }
+        valor = float(valor_str)
+    except:
+        return None  # não conseguiu converter, ignora
 
-    if valor_real < valor_min:
-        return {
-            "item": item,
-            "status": "Abaixo do normal",
-            "valor": valor_real,
-            "normal": f"{valor_min} - {valor_max}"
-        }
-    elif valor_real > valor_max:
-        return {
-            "item": item,
-            "status": "Acima do normal",
-            "valor": valor_real,
-            "normal": f"{valor_min} - {valor_max}"
-        }
-    else:
-        return {
-            "item": item,
-            "status": "Normal",
-            "valor": valor_real,
-            "normal": f"{valor_min} - {valor_max}"
-        }
-    
-if __name__ == "__main__":
-    resultado = checar_parametro("Viscosidade do sangue", 48.264, 65.371, 69.954)
-    print(resultado)
+    # busca no dicionário
+    if nome not in PARAMETROS_NORMAIS:
+        return None
 
-    resultado2 = checar_parametro("Ácido úrico", 1.435, 1.987, 3.11)
-    print(resultado2)
+    minimo, maximo = PARAMETROS_NORMAIS[nome]
+    if valor < minimo or valor > maximo:
+        # adiciona os limites ao registro para uso posterior
+        registro["minimo"] = minimo
+        registro["maximo"] = maximo
+        registro["valor_real"] = valor
+        return registro
 
-    resultado3 = checar_parametro("Vitamina E", 4.826, 6.013, 4.119)
-    print(resultado3)
+    return None
