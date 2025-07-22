@@ -127,21 +127,34 @@ PARAMETROS = {
 
 def extrair_valores_do_pdf(caminho_pdf):
     """
-    Lê o PDF e retorna dict { item: valor_str } usando apenas
-    a 2ª coluna (Item) e a 4ª coluna (Valor Real).
+    Lê o PDF e retorna dict { item: valor_str } usando
+    somente a 2ª coluna (Item) e a 4ª coluna (Valor Real).
     """
+    import pdfplumber
+
     resultados = {}
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
             for tabela in page.extract_tables():
                 for linha in tabela:
-                    # ignorar cabeçalhos ou linhas malformadas
-                    if not linha or len(linha) < 4 or linha[1].lower().startswith("item"):
+                    # garante pelo menos 4 colunas
+                    if not linha or len(linha) < 4:
                         continue
-                    item = (linha[1] or "").strip()
-                    valor = (linha[3] or "").strip()
+
+                    # normaliza None para ""
+                    item_cell = linha[1] or ""
+                    valor_cell = linha[3] or ""
+
+                    # ignora cabeçalho
+                    if item_cell.strip().lower().startswith("item"):
+                        continue
+
+                    item = item_cell.strip()
+                    valor = valor_cell.strip()
+
                     resultados[item] = valor
     return resultados
+
 
 def validar_valores(valores):
     """
