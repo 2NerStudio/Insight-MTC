@@ -1,6 +1,6 @@
 # validacao_parametros.py
 
-import sys
+import re
 import pdfplumber
 from io import BytesIO
 from docx import Document
