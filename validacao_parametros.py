@@ -137,7 +137,7 @@ def pdf_para_texto(caminho_pdf):
     
     return "\n".join(texto_completo)
 
-def extrair_valores_do_texto(texto):
+def extrair_valores_do_pdf(texto):
     """Extrai valores numéricos do texto convertido"""
     linhas = texto.split('\n')
     valores = []
@@ -201,7 +201,7 @@ def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomal
             raise ValueError("Não foi possível extrair texto do PDF.")
         
         # 2) Extrair valores do texto
-        valores = extrair_valores_do_texto(texto_pdf)
+        valores = extrair_valores_do_pdf(texto_pdf)
         if not valores:
             raise ValueError("Nenhum valor numérico foi encontrado no texto extraído.")
         
