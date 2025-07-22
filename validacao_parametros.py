@@ -130,31 +130,26 @@ def extrair_valores_do_pdf(caminho_pdf):
     Lê o PDF e retorna dict { item: valor_str } usando
     somente a 2ª coluna (Item) e a 4ª coluna (Valor Real).
     """
-    import pdfplumber
-
     resultados = {}
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
             for tabela in page.extract_tables():
                 for linha in tabela:
-                    # garante pelo menos 4 colunas
-                    if not linha or len(linha) < 4:
+                    # Verifica se a linha tem pelo menos 4 colunas
+                    if len(linha) < 4:
                         continue
-
-                    # normaliza None para ""
-                    item_cell = linha[1] or ""
-                    valor_cell = linha[3] or ""
-
-                    # ignora cabeçalho
-                    if item_cell.strip().lower().startswith("item"):
+                    
+                    # Remove espaços em branco e verifica se é cabeçalho
+                    item = (linha[1] or "").strip()
+                    valor = (linha[3] or "").strip()
+                    
+                    if not item or item.lower() == "item":
                         continue
-
-                    item = item_cell.strip()
-                    valor = valor_cell.strip()
-
-                    resultados[item] = valor
+                    
+                    # Adiciona ao dicionário somente se houver valor
+                    if valor:
+                        resultados[item] = valor
     return resultados
-
 
 def validar_valores(valores):
     """
@@ -163,21 +158,28 @@ def validar_valores(valores):
     """
     anomalias = []
     for item, val_str in valores.items():
-        if not val_str:
-            continue
-        try:
-            valor = float(val_str.replace(",", "."))
-        except ValueError:
-            continue
+        # Verifica se o item está na lista de parâmetros
         if item not in PARAMETROS:
             continue
+            
+        # Tenta converter para float, ignorando se não for possível
+        try:
+            valor = float(val_str.replace(",", "."))
+        except (ValueError, AttributeError):
+            continue
+            
+        # Obtém os valores de referência
         minimo, maximo = PARAMETROS[item]
+        
+        # Verifica se está fora do intervalo
         if valor < minimo:
             status = "Abaixo"
         elif valor > maximo:
             status = "Acima"
         else:
             continue
+            
+        # Adiciona à lista de anomalias
         anomalias.append({
             "item": item,
             "valor_real": valor,
@@ -185,6 +187,7 @@ def validar_valores(valores):
             "normal_min": minimo,
             "normal_max": maximo
         })
+    
     return anomalias
 
 def exportar_para_docx(texto, output_path):
@@ -197,31 +200,49 @@ def exportar_para_docx(texto, output_path):
     doc.save(output_path)
 
 def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
-    # 1) extrair
-    valores = extrair_valores_do_pdf(pdf_path)
-    # 2) validar
-    anomalias = validar_valores(valores)
-    # 3) montar texto
-    lines = [
-        "Relatório de Anomalias",
-        f"Terapeuta: {terapeuta}   Registro: {registro}",
-        ""
-    ]
-    if not anomalias:
-        lines.append("🎉 Todos os parâmetros dentro da normalidade.")
-    else:
-        for a in anomalias:
-            lines.append(
-                f"• {a['item']}: {a['valor_real']}  "
-                f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
-            )
-    texto = "\n".join(lines)
-    # 4) exportar
-    exportar_para_docx(texto, output_path)
-    print(f"✅ Relatório gerado: {output_path}")
+    try:
+        # 1) Extrair valores
+        valores = extrair_valores_do_pdf(pdf_path)
+        if not valores:
+            raise ValueError("Nenhum valor foi extraído do PDF. Verifique o formato do arquivo.")
+        
+        # 2) Validar valores
+        anomalias = validar_valores(valores)
+        
+        # 3) Montar texto do relatório
+        lines = [
+            "Relatório de Anomalias",
+            f"Terapeuta: {terapeuta}   Registro: {registro}",
+            ""
+        ]
+        
+        if not anomalias:
+            lines.append("🎉 Todos os parâmetros dentro da normalidade.")
+        else:
+            lines.append(f"⚠️ {len(anomalias)} anomalias encontradas:")
+            for a in anomalias:
+                lines.append(
+                    f"• {a['item']}: {a['valor_real']:.3f}  "
+                    f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
+                )
+        
+        texto = "\n".join(lines)
+        
+        # 4) Exportar para DOCX
+        exportar_para_docx(texto, output_path)
+        print(f"✅ Relatório gerado: {output_path}")
+        
+        return True, output_path
+        
+    except Exception as e:
+        print(f"❌ Erro ao gerar relatório: {str(e)}")
+        return False, str(e)
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
         print("Uso: python validacao_parametros.py <arquivo.pdf> \"Nome Terapeuta\" \"Registro\"")
         sys.exit(1)
-    gerar_relatorio(sys.argv[1], sys.argv[2], sys.argv[3])
+    
+    sucesso, resultado = gerar_relatorio(sys.argv[1], sys.argv[2], sys.argv[3])
+    if not sucesso:
+        sys.exit(1)
