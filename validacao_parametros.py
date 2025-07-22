@@ -127,37 +127,33 @@ PARAMETROS = {
 
 def extrair_valores_do_pdf(caminho_pdf):
     """
-    Extrai os valores da 4ª coluna e vincula corretamente aos parâmetros,
-    considerando a estrutura real do PDF.
+    Extrai os valores da 4ª coluna na ordem correta, começando pelo primeiro parâmetro
     """
     valores_reais = []
+    comecar_coleta = False  # Flag para iniciar coleta após encontrar o cabeçalho
     
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
-            # Configurações para melhor extração de tabelas
-            settings = {
+            # Extrai tabelas com configurações otimizadas
+            tabelas = page.extract_tables({
                 "vertical_strategy": "text",
                 "horizontal_strategy": "text",
-                "explicit_vertical_lines": [],
-                "explicit_horizontal_lines": [],
-                "snap_tolerance": 4,
-                "join_tolerance": 4,
-                "edge_min_length": 3
-            }
-            
-            tabelas = page.extract_tables(table_settings=settings)
+                "intersection_y_tolerance": 10
+            })
             
             for tabela in tabelas:
                 for linha in tabela:
-                    # Pega a 4ª coluna (índice 3) se existir
-                    if len(linha) >= 4:
-                        valor = (linha[3] or "").strip()
-                        # Limpa e converte o valor
-                        valor = valor.replace(",", ".").replace(" ", "")
+                    # Verifica se é a linha de cabeçalho para começar a coleta
+                    if len(linha) > 1 and "Item de Teste" in (linha[1] or ""):
+                        comecar_coleta = True
+                        continue
+                        
+                    if comecar_coleta and len(linha) >= 4:
+                        valor = (linha[3] or "").strip().replace(",", ".")
                         if valor and valor.replace(".", "", 1).isdigit():
                             valores_reais.append(float(valor))
     
-    # Cria dicionário com os valores encontrados
+    # Garante que só pegamos os valores correspondentes aos parâmetros
     return dict(zip(PARAMETROS.keys(), valores_reais[:len(PARAMETROS)]))
 
 def validar_valores(valores):
