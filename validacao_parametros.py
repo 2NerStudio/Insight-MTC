@@ -125,8 +125,8 @@ PARAMETROS = {
 
 def extrair_valores_do_pdf(caminho_pdf):
     """
-    Extrai a terceira coluna (intervalo normal) para identificar o parâmetro
-    e a quarta coluna (valor real) para comparação.
+    Extrai intervalos normais (Coluna 3) e valores reais (Coluna 4),
+    identificando o parâmetro com base no intervalo.
     """
     dados = []
     
@@ -136,9 +136,10 @@ def extrair_valores_do_pdf(caminho_pdf):
             
             for tabela in tabelas:
                 for linha in tabela:
-                    if len(linha) >= 4:
-                        intervalo_normal = linha[2].strip()  # Terceira coluna
-                        valor_real = linha[3].strip()       # Quarta coluna
+                    # Verifica se a linha tem pelo menos 4 colunas
+                    if len(linha) >= 4 and linha[2] and linha[3]:
+                        intervalo_normal = linha[2].strip()  # Coluna 3
+                        valor_real = linha[3].strip()        # Coluna 4
                         
                         # Limpa e formata os valores
                         valor_real = valor_real.replace(",", ".")
@@ -146,18 +147,22 @@ def extrair_valores_do_pdf(caminho_pdf):
                         
                         # Extrai mínimo e máximo do intervalo (ex: "48.264 - 65.371")
                         if " - " in intervalo_normal:
-                            minimo, maximo = map(float, intervalo_normal.split(" - "))
-                            
-                            # Identifica o nome do parâmetro com base no intervalo
-                            parametro = PARAMETROS.get((minimo, maximo), "Desconhecido")
-                            
-                            if valor_real.replace(".", "", 1).isdigit():
-                                dados.append({
-                                    "parametro": parametro,
-                                    "valor_real": float(valor_real),
-                                    "normal_min": minimo,
-                                    "normal_max": maximo
-                                })
+                            try:
+                                minimo, maximo = map(float, intervalo_normal.split(" - "))
+                                
+                                # Identifica o parâmetro com base no intervalo
+                                parametro = PARAMETROS.get((minimo, maximo), "Desconhecido")
+                                
+                                # Converte o valor real para float
+                                if valor_real.replace(".", "", 1).isdigit():
+                                    dados.append({
+                                        "parametro": parametro,
+                                        "valor_real": float(valor_real),
+                                        "normal_min": minimo,
+                                        "normal_max": maximo
+                                    })
+                            except (ValueError, AttributeError):
+                                continue  # Ignora linhas com formatos inválidos
     
     return dados
 
