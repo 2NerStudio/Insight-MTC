@@ -1,6 +1,6 @@
 import streamlit as st
 from extrair_dados import extrair_valores_apenas
-from validacao_parametros import validar_valores
+from validacao_parametros import validar_valores, gerar_relatorio_anomalias  # importamos a geração de docx
 from utils import exportar_para_docx
 
 # ========================================

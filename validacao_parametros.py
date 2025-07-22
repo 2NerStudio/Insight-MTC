@@ -2,7 +2,7 @@
 
 import sys
 from extrair_dados import extrair_valores_apenas
-from parametros import PARAMETROS_NORMAIS
+from parametros import PARAMETROS
 from utils import exportar_para_docx
 
 def validar_valores(valores: dict):
@@ -24,9 +24,9 @@ def validar_valores(valores: dict):
             valor = float(val_str.replace(",", "."))
         except ValueError:
             continue
-        if item not in PARAMETROS_NORMAIS:
+        if item not in PARAMETROS:
             continue
-        minimo, maximo = PARAMETROS_NORMAIS[item]
+        minimo, maximo = PARAMETROS[item]
         if valor < minimo:
             status = "Abaixo"
         elif valor > maximo:
