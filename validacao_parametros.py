@@ -141,8 +141,9 @@ def extrair_valores_do_pdf(caminho_pdf):
                 for linha in tabela:
                     # Pega a 4ª coluna (índice 3) se existir
                     if len(linha) >= 4:
-                        valor = linha[3].strip().replace(",", ".")
-                        if valor.replace(".", "", 1).isdigit():
+                        valor = (linha[3] or "").strip().replace(",", ".")
+                        # VERIFICAÇÃO MODIFICADA AQUI ↓
+                        if valor and valor.replace(".", "", 1).isdigit():
                             valores_reais.append(float(valor))
     
     # Vincula os valores aos parâmetros na mesma ordem
