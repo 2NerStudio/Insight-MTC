@@ -128,27 +128,44 @@ PARAMETROS = {
 def extrair_valores_do_pdf(caminho_pdf):
     """
     Lê o PDF e retorna dict { item: valor_str } usando
-    somente a 2ª coluna (Item) e a 4ª coluna (Valor Real).
+    a 2ª coluna (Item de Teste) e a 4ª coluna (Valor de Medição Real).
     """
     resultados = {}
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
-            for tabela in page.extract_tables():
+            # Extrai tabelas mantendo o layout vertical
+            settings = {
+                "vertical_strategy": "text", 
+                "horizontal_strategy": "text",
+                "keep_blank_chars": True
+            }
+            tabelas = page.extract_tables(settings)
+            
+            for tabela in tabelas:
                 for linha in tabela:
                     # Verifica se a linha tem pelo menos 4 colunas
                     if len(linha) < 4:
                         continue
                     
-                    # Remove espaços em branco e verifica se é cabeçalho
+                    # Pega as colunas relevantes
                     item = (linha[1] or "").strip()
                     valor = (linha[3] or "").strip()
                     
-                    if not item or item.lower() == "item":
+                    # Ignora cabeçalhos e linhas vazias
+                    if not item or item.lower() in ["item de teste", "sistema", "---"]:
                         continue
                     
-                    # Adiciona ao dicionário somente se houver valor
-                    if valor:
+                    # Limpa valores quebrados por múltiplas linhas
+                    item = " ".join(item.split())
+                    valor = " ".join(valor.split())
+                    
+                    # Substitui vírgula por ponto para decimal
+                    valor = valor.replace(",", ".")
+                    
+                    # Adiciona ao dicionário se tiver valor numérico
+                    if valor.replace(".", "").isdigit():
                         resultados[item] = valor
+    
     return resultados
 
 def validar_valores(valores):
