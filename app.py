@@ -1,5 +1,5 @@
 import streamlit as st
-from extrair_valores import extrair_valores_apenas
+from extrair_dados import extrair_valores_apenas
 from utils import transformar_relatorio, exportar_para_docx
 
 # ========================================
