@@ -27,7 +27,6 @@ if not st.session_state.autenticado:
     if login_botao:
         if usuario in usuarios_autorizados and senha == usuarios_autorizados[usuario]:
             st.session_state.autenticado = True
-            st.rerun()
         else:
             st.error("❌ Usuário ou senha inválidos.")
 
@@ -41,7 +40,6 @@ elif st.session_state.autenticado:
     st.sidebar.success("🔓 Autenticado")
     if st.sidebar.button("Sair"):
         st.session_state.autenticado = False
-        st.rerun()
 
     # Logo (opcional)
     try:
