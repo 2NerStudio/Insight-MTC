@@ -127,56 +127,42 @@ PARAMETROS = {
 
 import pdfplumber
 
-INTERVALO_TO_ITEM = {v: k for k, v in PARAMETROS.items()}
+def extrair_valores_regex(caminho_pdf):
+    """
+    Lê todo o texto do PDF e aplica regex para capturar
+    min-max valor_real, retornando lista de (min, max, valor_real).
+    """
+    pattern = re.compile(r'(\d+\.\d+)\s*-\s*(\d+\.\d+)\s+(\d+[.,]?\d*)')
+    encontrados = []
 
-def extrair_por_intervalo(caminho_pdf: str) -> list[tuple[str, float, float, float]]:
-    """
-    Retorna lista de tuplas (item, valor_real, min, max) para cada linha do PDF
-    identificada pelo intervalo (3ª coluna) e valor (4ª coluna).
-    """
-    resultados = []
     with pdfplumber.open(caminho_pdf) as pdf:
-        for page in pdf.pages:
-            for tabela in page.extract_tables():
-                for linha in tabela:
-                    # precisa ter pelo menos 4 colunas
-                    if not linha or len(linha) < 4:
-                        continue
-                    raw_intervalo = (linha[2] or "").strip().replace(" ", "")
-                    raw_val      = (linha[3] or "").strip().replace(" ", "").replace(",", ".")
+        texto = "\n".join(page.extract_text() or "" for page in pdf.pages)
 
-                    # parse intervalo "min-max"
-                    parts = raw_intervalo.split("-")
-                    if len(parts) != 2:
-                        continue
-                    try:
-                        i_min = float(parts[0])
-                        i_max = float(parts[1])
-                    except:
-                        continue
+    for match in pattern.finditer(texto):
+        min_s, max_s, val_s = match.groups()
+        i_min = float(min_s)
+        i_max = float(max_s)
+        valor = float(val_s.replace(",", "."))
+        encontrados.append((i_min, i_max, valor))
 
-                    # identifica o item por intervalo
-                    key = (i_min, i_max)
-                    item = INTERVALO_TO_ITEM.get(key)
-                    if not item:
-                        continue
+    return encontrados
 
-                    # parse valor real
-                    try:
-                        valor = float(raw_val)
-                    except:
-                        continue
-
-                    resultados.append((item, valor, i_min, i_max))
-    return resultados
-
-def validar_por_intervalo(registros: list[tuple[str, float, float, float]]) -> list[dict]:
+def validar_por_intervalo_regex(caminho_pdf):
     """
-    Filtra registros fora do intervalo, devolvendo lista de:
-    { item, valor_real, status, normal_min, normal_max }
+    Para cada tripla extraída por regex, identifica o item
+    pelo (i_min, i_max) e filtra as anomalias.
+    Retorna lista de dicts { item, valor_real, status, normal_min, normal_max }.
     """
+    # mapeia intervalo->item
+    inv = {v: k for k, v in PARAMETROS.items()}
+    registros = extrair_valores_regex(caminho_pdf)
     anomalias = []
-    for item, valor, i_min, i_max in registros:
+
+    for i_min, i_max, valor in registros:
+        chave = (i_min, i_max)
+        item = inv.get(chave)
+        if not item:
+            continue
         if valor < i_min:
             status = "Abaixo"
         elif valor > i_max:
@@ -192,34 +178,21 @@ def validar_por_intervalo(registros: list[tuple[str, float, float, float]]) -> l
         })
     return anomalias
 
-def gerar_relatorio_por_intervalo(pdf_path: str, terapeuta: str, registro: str, output_path="relatorio_intervalo.docx"):
-    """
-    Extrai, valida e exporta um .docx contendo apenas as anomalias
-    baseadas em intervalo.
-    """
-    registros = extrair_por_intervalo(pdf_path)
-    anomalias = validar_por_intervalo(registros)
+def gerar_relatorio_pdf_regex(pdf_path, terapeuta, registro, output_path="relatorio_regex.docx"):
+    anomalias = validar_por_intervalo_regex(pdf_path)
 
-    # monta texto
-    lines = [
-        "Relatório de Anomalias (via Intervalo)",
-        f"Terapeuta: {terapeuta}   Registro: {registro}",
-        ""
-    ]
+    doc = Document()
+    doc.add_paragraph("Relatório de Anomalias (regex)")
+    doc.add_paragraph(f"Terapeuta: {terapeuta}   Registro: {registro}")
+    doc.add_paragraph("")
 
     if not anomalias:
-        lines.append("🎉 Todos os parâmetros dentro da normalidade.")
+        doc.add_paragraph("🎉 Todos os parâmetros dentro da normalidade.")
     else:
         for a in anomalias:
-            lines.append(
-                f"• {a['item']}: {a['valor_real']}  "
-                f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
-            )
+            texto = (f"• {a['item']}: {a['valor_real']}  "
+                     f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})")
+            doc.add_paragraph(texto)
 
-    texto = "\n".join(lines)
-    # exporta docx
-    doc = Document()
-    for l in texto.split("\n"):
-        doc.add_paragraph(l)
     doc.save(output_path)
     return output_path
