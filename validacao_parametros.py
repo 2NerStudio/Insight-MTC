@@ -127,38 +127,36 @@ PARAMETROS = {
 
 def extrair_valores_do_pdf(caminho_pdf):
     """
-    Extrai os valores da 4ª coluna e vincula corretamente aos parâmetros,
-    considerando a estrutura real do PDF.
+    Lê o PDF e retorna dict { item: valor_str } para cada item em PARAMETROS,
+    extraindo a 2ª (Item) e 4ª (Valor Real) colunas da tabela, sem zip.
     """
-    valores_reais = []
-    
+    resultados = {}
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
-            # Configurações para melhor extração de tabelas
-            settings = {
-                "vertical_strategy": "text",
-                "horizontal_strategy": "text",
-                "explicit_vertical_lines": [],
-                "explicit_horizontal_lines": [],
-                "snap_tolerance": 4,
-                "join_tolerance": 4,
-                "edge_min_length": 3
-            }
-            
-            tabelas = page.extract_tables(table_settings=settings)
-            
-            for tabela in tabelas:
+            tables = page.extract_tables()
+            for tabela in tables:
                 for linha in tabela:
-                    # Pega a 4ª coluna (índice 3) se existir
-                    if len(linha) >= 4:
-                        valor = (linha[3] or "").strip()
-                        # Limpa e converte o valor
-                        valor = valor.replace(",", ".").replace(" ", "")
-                        if valor and valor.replace(".", "", 1).isdigit():
-                            valores_reais.append(float(valor))
-    
-    # Cria dicionário com os valores encontrados
-    return dict(zip(PARAMETROS.keys(), valores_reais[:len(PARAMETROS)]))
+                    # garante 4 colunas
+                    if not linha or len(linha) < 4:
+                        continue
+
+                    item_cell = (linha[1] or "").strip()
+                    valor_cell = (linha[3] or "").strip().replace(",", ".")
+
+                    # ignora cabeçalho
+                    if item_cell.lower().startswith("item"):
+                        continue
+
+                    # só grava se for um parâmetro que você definiu
+                    if item_cell in PARAMETROS:
+                        # testa se é número
+                        try:
+                            _ = float(valor_cell)
+                            resultados[item_cell] = valor_cell
+                        except:
+                            pass
+
+    return resultados
 
 def validar_valores(valores):
     """
