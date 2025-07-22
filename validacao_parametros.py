@@ -1,6 +1,6 @@
 # validacao_parametros.py
+
 import sys
-import re
 import pdfplumber
 from io import BytesIO
 from docx import Document
@@ -125,72 +125,130 @@ PARAMETROS = {
 "Índice de ácidos gordos essenciais": (2.144, 3.238)
 }
 
-INTERVALO_TO_ITEM = {v: k for k, v in PARAMETROS.items()}
-
-
-def extrair_por_regex(caminho_pdf):
+def extrair_valores_do_pdf(caminho_pdf):
     """
-    Lê todo o texto do PDF e retorna uma lista de tuplas:
-      (item, valor_real, min, max)
-    encontradas pelo padrão 'min - max  valor'
+    Extrai APENAS os valores da 4ª coluna (Valor Real) na ordem em que aparecem,
+    e vincula aos parâmetros na mesma ordem do dicionário PARAMETROS.
     """
-    # regex: captura 2 números de ponto flutuante separados por '-' e um terceiro número
-    pattern = re.compile(r'(\d+\.\d+)\s*-\s*(\d+\.\d+)\s+(\d+[.,]?\d*)')
+    valores_reais = []
     
     with pdfplumber.open(caminho_pdf) as pdf:
-        texto = "\n".join(page.extract_text() or "" for page in pdf.pages)
-
-    registros = []
-    for m in pattern.finditer(texto):
-        min_s, max_s, val_s = m.groups()
-        i_min = float(min_s)
-        i_max = float(max_s)
-        valor = float(val_s.replace(",", "."))
-        
-        # tenta mapear ao item conhecido
-        item = INTERVALO_TO_ITEM.get((i_min, i_max))
-        if item:
-            registros.append((item, valor, i_min, i_max))
-    return registros
-
-
-def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
-    """
-    Extrai via regex, valida e exporta um .docx com as anomalias.
-    """
-    registros = extrair_por_regex(pdf_path)
+        for page in pdf.pages:
+            # Extrai todas as tabelas da página
+            tabelas = page.extract_tables()
+            
+            for tabela in tabelas:
+                for linha in tabela:
+                    # Pega a 4ª coluna (índice 3) se existir
+                    if len(linha) >= 4:
+                        valor = (linha[3] or "").strip().replace(",", ".")
+                        # VERIFICAÇÃO MODIFICADA AQUI ↓
+                        if valor and valor.replace(".", "", 1).isdigit():
+                            valores_reais.append(float(valor))
     
-    # monta documento
-    doc = Document()
-    doc.add_heading("Relatório de Anomalias", level=1)
-    doc.add_paragraph(f"Terapeuta: {terapeuta}   Registro: {registro}")
-    doc.add_paragraph("")
+    # Vincula os valores aos parâmetros na mesma ordem
+    parametros_ordenados = list(PARAMETROS.keys())
+    resultados = {}
+    
+    for i, valor in enumerate(valores_reais):
+        if i < len(parametros_ordenados):
+            param = parametros_ordenados[i]
+            resultados[param] = valor
+    
+    return resultados
 
-    anomalias = 0
-    for item, valor, i_min, i_max in registros:
-        if valor < i_min:
+def validar_valores(valores):
+    """
+    Para cada item em 'valores', verifica se está fora do intervalo em PARAMETROS.
+    Retorna lista de anomalias: dicts com item, valor_real, status, normal_min, normal_max.
+    """
+    anomalias = []
+    for item, val_str in valores.items():
+        # Verifica se o item está na lista de parâmetros
+        if item not in PARAMETROS:
+            continue
+            
+        # Tenta converter para float, ignorando se não for possível
+        try:
+            valor = float(val_str.replace(",", "."))
+        except (ValueError, AttributeError):
+            continue
+            
+        # Obtém os valores de referência
+        minimo, maximo = PARAMETROS[item]
+        
+        # Verifica se está fora do intervalo
+        if valor < minimo:
             status = "Abaixo"
-        elif valor > i_max:
+        elif valor > maximo:
             status = "Acima"
         else:
             continue
-        anomalias += 1
-        doc.add_paragraph(
-            f"• {item}: {valor:.3f}  "
-            f"({status} do normal; Normal: {i_min}–{i_max})"
-        )
-
-    if anomalias == 0:
-        doc.add_paragraph("🎉 Todos os parâmetros dentro da normalidade.")
+            
+        # Adiciona à lista de anomalias
+        anomalias.append({
+            "item": item,
+            "valor_real": valor,
+            "status": status,
+            "normal_min": minimo,
+            "normal_max": maximo
+        })
     
-    doc.save(output_path)
-    print(f"✅ Relatório gerado: {output_path}")
+    return anomalias
 
+def exportar_para_docx(texto, output_path):
+    """
+    Cria um .docx com o texto dado e salva em output_path.
+    """
+    doc = Document()
+    for line in texto.split("\n"):
+        doc.add_paragraph(line)
+    doc.save(output_path)
+
+def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
+    try:
+        # 1) Extrair valores
+        valores = extrair_valores_do_pdf(pdf_path)
+        if not valores:
+            raise ValueError("Nenhum valor foi extraído do PDF. Verifique o formato do arquivo.")
+        
+        # 2) Validar valores
+        anomalias = validar_valores(valores)
+        
+        # 3) Montar texto do relatório
+        lines = [
+            "Relatório de Anomalias",
+            f"Terapeuta: {terapeuta}   Registro: {registro}",
+            ""
+        ]
+        
+        if not anomalias:
+            lines.append("🎉 Todos os parâmetros dentro da normalidade.")
+        else:
+            lines.append(f"⚠️ {len(anomalias)} anomalias encontradas:")
+            for a in anomalias:
+                lines.append(
+                    f"• {a['item']}: {a['valor_real']:.3f}  "
+                    f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
+                )
+        
+        texto = "\n".join(lines)
+        
+        # 4) Exportar para DOCX
+        exportar_para_docx(texto, output_path)
+        print(f"✅ Relatório gerado: {output_path}")
+        
+        return True, output_path
+        
+    except Exception as e:
+        print(f"❌ Erro ao gerar relatório: {str(e)}")
+        return False, str(e)
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
         print("Uso: python validacao_parametros.py <arquivo.pdf> \"Nome Terapeuta\" \"Registro\"")
         sys.exit(1)
-
-    pdf_file, nome, reg = sys.argv[1], sys.argv[2], sys.argv[3]
-    gerar_relatorio(pdf_file, nome, reg)
+    
+    sucesso, resultado = gerar_relatorio(sys.argv[1], sys.argv[2], sys.argv[3])
+    if not sucesso:
+        sys.exit(1)
