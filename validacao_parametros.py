@@ -1,5 +1,3 @@
-# validacao_parametros.py
-
 import sys
 import pdfplumber
 from io import BytesIO
@@ -127,72 +125,68 @@ PARAMETROS = {
 
 def extrair_valores_do_pdf(caminho_pdf):
     """
-    Extrai APENAS os valores da 4ª coluna (Valor Real) na ordem em que aparecem,
-    e vincula aos parâmetros na mesma ordem do dicionário PARAMETROS.
+    Extrai os valores da 4ª coluna e vincula corretamente aos parâmetros,
+    considerando a estrutura real do PDF.
     """
     valores_reais = []
     
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
-            # Extrai todas as tabelas da página
-            tabelas = page.extract_tables()
+            # Configurações para melhor extração de tabelas
+            settings = {
+                "vertical_strategy": "text",
+                "horizontal_strategy": "text",
+                "explicit_vertical_lines": [],
+                "explicit_horizontal_lines": [],
+                "snap_tolerance": 4,
+                "join_tolerance": 4,
+                "edge_min_length": 3
+            }
+            
+            tabelas = page.extract_tables(table_settings=settings)
             
             for tabela in tabelas:
                 for linha in tabela:
                     # Pega a 4ª coluna (índice 3) se existir
                     if len(linha) >= 4:
-                        valor = (linha[3] or "").strip().replace(",", ".")
-                        # VERIFICAÇÃO MODIFICADA AQUI ↓
+                        valor = (linha[3] or "").strip()
+                        # Limpa e converte o valor
+                        valor = valor.replace(",", ".").replace(" ", "")
                         if valor and valor.replace(".", "", 1).isdigit():
                             valores_reais.append(float(valor))
     
-    # Vincula os valores aos parâmetros na mesma ordem
-    parametros_ordenados = list(PARAMETROS.keys())
-    resultados = {}
-    
-    for i, valor in enumerate(valores_reais):
-        if i < len(parametros_ordenados):
-            param = parametros_ordenados[i]
-            resultados[param] = valor
-    
-    return resultados
+    # Cria dicionário com os valores encontrados
+    return dict(zip(PARAMETROS.keys(), valores_reais[:len(PARAMETROS)]))
 
 def validar_valores(valores):
     """
-    Para cada item em 'valores', verifica se está fora do intervalo em PARAMETROS.
-    Retorna lista de anomalias: dicts com item, valor_real, status, normal_min, normal_max.
+    Versão corrigida da validação
     """
     anomalias = []
-    for item, val_str in valores.items():
-        # Verifica se o item está na lista de parâmetros
+    for item, valor in valores.items():
         if item not in PARAMETROS:
             continue
             
-        # Tenta converter para float, ignorando se não for possível
         try:
-            valor = float(val_str.replace(",", "."))
-        except (ValueError, AttributeError):
-            continue
+            valor = float(valor) if not isinstance(valor, float) else valor
+            minimo, maximo = PARAMETROS[item]
             
-        # Obtém os valores de referência
-        minimo, maximo = PARAMETROS[item]
-        
-        # Verifica se está fora do intervalo
-        if valor < minimo:
-            status = "Abaixo"
-        elif valor > maximo:
-            status = "Acima"
-        else:
+            if valor < minimo:
+                status = "Abaixo"
+            elif valor > maximo:
+                status = "Acima"
+            else:
+                continue
+                
+            anomalias.append({
+                "item": item,
+                "valor_real": valor,
+                "status": status,
+                "normal_min": minimo,
+                "normal_max": maximo
+            })
+        except (ValueError, TypeError):
             continue
-            
-        # Adiciona à lista de anomalias
-        anomalias.append({
-            "item": item,
-            "valor_real": valor,
-            "status": status,
-            "normal_min": minimo,
-            "normal_max": maximo
-        })
     
     return anomalias
 
