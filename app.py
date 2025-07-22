@@ -1,90 +1,55 @@
 import streamlit as st
-import tempfile
-import os
-from validacao_parametros import extrair_valores_do_pdf, validar_valores, gerar_relatorio
+import tempfile, os
+from validacao_parametros import gerar_relatorio_por_intervalo
 
-# ========================================
-# LOGIN SIMPLES
-# ========================================
-usuarios_autorizados = {
-    "yan": "1234",
-    "cliente1": "senha123",
-    "Dolorice20": "Rebeca10"
-}
-
-if "autenticado" not in st.session_state:
-    st.session_state.autenticado = False
+# ——— Login simples ———
+usuarios_autorizados = {"yan":"1234", "cliente1":"senha123","Dolorice20":"Rebeca10"}
+if "autenticado" not in st.session_state: st.session_state.autenticado = False
 
 if not st.session_state.autenticado:
-    st.set_page_config(page_title="Login - MTC Insight", layout="centered")
-    st.title("🔐 Área de Login")
-    usuario = st.text_input("Usuário")
-    senha = st.text_input("Senha", type="password")
+    st.set_page_config(page_title="Login", layout="centered")
+    st.title("🔐 Login")
+    u = st.text_input("Usuário"); s = st.text_input("Senha", type="password")
     if st.button("Entrar"):
-        if usuarios_autorizados.get(usuario) == senha:
-            st.session_state.autenticado = True
-        else:
-            st.error("❌ Usuário ou senha inválidos.")
+        if usuarios_autorizados.get(u)==s:
+            st.session_state.autenticado = True; st.experimental_rerun()
+        else: st.error("Usuário ou senha inválidos.")
     st.stop()
 
-# ========================================
-# APP PRINCIPAL
-# ========================================
+# ——— App principal ———
 st.set_page_config(page_title="MTC Insight", layout="centered", page_icon="🌿")
-st.sidebar.success("🔓 Autenticado")
 if st.sidebar.button("Sair"):
-    st.session_state.autenticado = False
+    st.session_state.autenticado = False; st.experimental_rerun()
 
 st.title("🌿 MTC Insight Pro")
-st.caption("Extrai só a 4ª coluna (Valor Real) e valida contra os parâmetros")
+st.caption("Validação por Intervalo de Parâmetros")
 
-# Dados do terapeuta
-st.subheader("🧑‍⚕️ Informações do Terapeuta")
-nome_terapeuta = st.text_input("Nome completo do terapeuta")
-registro_terapeuta = st.text_input("CRF / CRTH / Registro profissional")
+# Terapeuta
+st.subheader("🧑‍⚕️ Terapeuta")
+nome = st.text_input("Nome completo"); reg = st.text_input("Registro")
 
-# Upload do PDF
-st.subheader("📎 Upload do Relatório Original (.pdf)")
-arquivo = st.file_uploader("Selecione o arquivo", type=["pdf"])
+# Upload
+st.subheader("📎 Envie o PDF")
+arquivo = st.file_uploader("", type=["pdf"])
 
-if st.button("⚙️ Validar Parâmetros"):
-    if not nome_terapeuta or not registro_terapeuta:
-        st.warning("⚠️ Preencha os dados do terapeuta.")
+if st.button("⚙️ Validar por Intervalo"):
+    if not nome or not reg:
+        st.warning("Preencha terapeuta e registro.")
     elif not arquivo:
-        st.warning("⚠️ Envie o relatório original.")
+        st.warning("Envie o PDF.")
     else:
-        with st.spinner("🔍 Processando..."):
-            # grava o upload em um temp file
+        with st.spinner("Processando..."):
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-            tmp.write(arquivo.read())
-            tmp.close()
+            tmp.write(arquivo.read()); tmp.close()
 
-            # 1) Extrai só coluna 4
-            valores = extrair_valores_do_pdf(tmp.name)
-            # 2) Valida
-            anomalias = validar_valores(valores)
+            out = gerar_relatorio_por_intervalo(tmp.name, nome, reg,
+                output_path=os.path.join(tempfile.gettempdir(),"relatorio_intervalo.docx")
+            )
 
-        if not anomalias:
-            st.success("🎉 Todos os parâmetros dentro da normalidade.")
-        else:
-            st.error(f"⚠️ {len(anomalias)} anomalias encontradas:")
-            for a in anomalias:
-                st.markdown(
-                    f"- **{a['item']}**: {a['valor_real']}  "
-                    f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
-                )
-
-            # 3) Gera e disponibiliza download do .docx
-            output_path = os.path.join(tempfile.gettempdir(), "relatorio_anomalias.docx")
-            gerar_relatorio(tmp.name, nome_terapeuta, registro_terapeuta, output_path)
-
-            with open(output_path, "rb") as f:
-                st.download_button(
-                    "⬇️ Baixar relatório de anomalias (.docx)",
-                    data=f.read(),
-                    file_name="relatorio_anomalias.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
-
-        # remove temp file
+        st.success("✅ Relatório pronto!")
+        with open(out,"rb") as f:
+            st.download_button("⬇️ Baixar relatório", f.read(),
+                file_name="relatorio_intervalo.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
         os.unlink(tmp.name)
