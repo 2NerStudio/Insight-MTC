@@ -1,7 +1,7 @@
 import streamlit as st
 import tempfile
 import os
-from validacao_parametros import extrair_valores_do_pdf, validar_valores, gerar_relatorio
+from validacao_parametros import extrair_por_intervalo, gerar_relatorio_por_intervalo
 
 # ========================================
 # LOGIN SIMPLES
@@ -47,44 +47,30 @@ registro_terapeuta = st.text_input("CRF / CRTH / Registro profissional")
 st.subheader("📎 Upload do Relatório Original (.pdf)")
 arquivo = st.file_uploader("Selecione o arquivo", type=["pdf"])
 
-if st.button("⚙️ Validar Parâmetros"):
+if st.button("⚙️ Validar Parâmetros (por intervalo)"):
     if not nome_terapeuta or not registro_terapeuta:
         st.warning("⚠️ Preencha os dados do terapeuta.")
     elif not arquivo:
         st.warning("⚠️ Envie o relatório original.")
     else:
-        with st.spinner("🔍 Processando..."):
-            # grava o upload em um temp file
+        with st.spinner("🔍 Extraindo por intervalo..."):
+            # salva temporário
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
             tmp.write(arquivo.read())
             tmp.close()
 
-            # 1) Extrai só coluna 4
-            valores = extrair_valores_do_pdf(tmp.name)
-            # 2) Valida
-            anomalias = validar_valores(valores)
+            # extrai e gera docx
+            rel_path = gerar_relatorio_por_intervalo(
+                tmp.name, nome_terapeuta, registro_terapeuta,
+                output=os.path.join(tempfile.gettempdir(), "relatorio_intervalo.docx")
+            )
 
-        if not anomalias:
-            st.success("🎉 Todos os parâmetros dentro da normalidade.")
-        else:
-            st.error(f"⚠️ {len(anomalias)} anomalias encontradas:")
-            for a in anomalias:
-                st.markdown(
-                    f"- **{a['item']}**: {a['valor_real']}  "
-                    f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
-                )
-
-            # 3) Gera e disponibiliza download do .docx
-            output_path = os.path.join(tempfile.gettempdir(), "relatorio_anomalias.docx")
-            gerar_relatorio(tmp.name, nome_terapeuta, registro_terapeuta, output_path)
-
-            with open(output_path, "rb") as f:
-                st.download_button(
-                    "⬇️ Baixar relatório de anomalias (.docx)",
-                    data=f.read(),
-                    file_name="relatorio_anomalias.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
-
-        # remove temp file
+        st.success("✅ Relatório gerado com base em intervalos!")
+        with open(rel_path, "rb") as f:
+            st.download_button(
+                "⬇️ Baixar relatório",
+                data=f.read(),
+                file_name="relatorio_intervalo.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
         os.unlink(tmp.name)
