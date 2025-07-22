@@ -124,70 +124,68 @@ PARAMETROS = {
 "Índice de ácidos gordos essenciais": (2.144, 3.238)
 }
 
-def pdf_para_texto(caminho_pdf):
-    """Converte o PDF em texto bruto, preservando quebras de linha"""
-    texto_completo = []
+def extrair_valores_do_pdf(caminho_pdf):
+    """Extrai os valores da 4ª coluna com tratamento robusto"""
+    valores = []
     
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
-            # Extrai texto mantendo layout básico
-            texto_pagina = page.extract_text(layout=True, x_density=2, y_density=2)
-            if texto_pagina:
-                texto_completo.append(texto_pagina)
-    
-    return "\n".join(texto_completo)
-
-def extrair_valores_do_pdf(texto):
-    """Extrai valores numéricos do texto convertido"""
-    linhas = texto.split('\n')
-    valores = []
-    
-    for linha in linhas:
-        # Remove espaços extras e divide por espaços/tabs
-        partes = [p for p in linha.replace('\t', ' ').split(' ') if p]
-        
-        # Procura por valores numéricos em cada parte
-        for parte in partes:
-            # Limpa e testa se é número
-            parte_limpa = parte.replace(",", ".").strip()
-            if parte_limpa.replace(".", "", 1).isdigit():
-                valores.append(float(parte_limpa))
+            # Configuração otimizada para tabelas com bordas visíveis
+            table_settings = {
+                "vertical_strategy": "lines",
+                "horizontal_strategy": "lines",
+                "intersection_y_tolerance": 10
+            }
+            
+            tabelas = page.extract_tables(table_settings)
+            
+            for tabela in tabelas:
+                for linha in tabela:
+                    # Pega a 4ª coluna se existir
+                    if len(linha) >= 4:
+                        valor = linha[3].strip() if linha[3] else ""
+                        # Limpeza robusta do valor
+                        valor = (valor.replace(",", ".")
+                              .replace(" ", "")
+                              .replace("\n", "")
+                              .replace("'", ""))
+                        
+                        if valor and valor.replace(".", "", 1).isdigit():
+                            valores.append(float(valor))
     
     # Garante que pegamos exatamente a quantidade necessária
     return dict(zip(PARAMETROS.keys(), valores[:len(PARAMETROS)]))
 
 def validar_valores(valores):
-    """Versão corrigida da validação"""
+    """Validação rigorosa mantendo a lógica original"""
     anomalias = []
+    
     for item, valor in valores.items():
         if item not in PARAMETROS:
             continue
             
         try:
-            valor = float(valor) if not isinstance(valor, float) else valor
             minimo, maximo = PARAMETROS[item]
+            valor = float(valor)
             
-            if valor < minimo:
-                status = "Abaixo"
-            elif valor > maximo:
-                status = "Acima"
-            else:
-                continue
-                
-            anomalias.append({
-                "item": item,
-                "valor_real": valor,
-                "status": status,
-                "normal_min": minimo,
-                "normal_max": maximo
-            })
+            if not (minimo <= valor <= maximo):
+                status = "Abaixo" if valor < minimo else "Acima"
+                anomalias.append({
+                    "item": item,
+                    "valor_real": valor,
+                    "status": status,
+                    "normal_min": minimo,
+                    "normal_max": maximo
+                })
         except (ValueError, TypeError):
             continue
     
     return anomalias
 
 def exportar_para_docx(texto, output_path):
-    """Cria um .docx com o texto dado"""
+    """
+    Cria um .docx com o texto dado e salva em output_path.
+    """
     doc = Document()
     for line in texto.split("\n"):
         doc.add_paragraph(line)
@@ -195,20 +193,15 @@ def exportar_para_docx(texto, output_path):
 
 def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
     try:
-        # 1) Converter PDF para texto
-        texto_pdf = pdf_para_texto(pdf_path)
-        if not texto_pdf:
-            raise ValueError("Não foi possível extrair texto do PDF.")
-        
-        # 2) Extrair valores do texto
-        valores = extrair_valores_do_pdf(texto_pdf)
+        # 1) Extrair valores
+        valores = extrair_valores_do_pdf(pdf_path)
         if not valores:
-            raise ValueError("Nenhum valor numérico foi encontrado no texto extraído.")
+            raise ValueError("Nenhum valor foi extraído do PDF. Verifique o formato do arquivo.")
         
-        # 3) Validar valores
+        # 2) Validar valores
         anomalias = validar_valores(valores)
         
-        # 4) Montar relatório
+        # 3) Montar texto do relatório
         lines = [
             "Relatório de Anomalias",
             f"Terapeuta: {terapeuta}   Registro: {registro}",
@@ -225,10 +218,10 @@ def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomal
                     f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
                 )
         
-        texto_relatorio = "\n".join(lines)
+        texto = "\n".join(lines)
         
-        # 5) Exportar para DOCX
-        exportar_para_docx(texto_relatorio, output_path)
+        # 4) Exportar para DOCX
+        exportar_para_docx(texto, output_path)
         print(f"✅ Relatório gerado: {output_path}")
         
         return True, output_path
