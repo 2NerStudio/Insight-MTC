@@ -1,5 +1,4 @@
 import pdfplumber
-from extrair_dados import extrair_dados_do_pdf
 from parametros import PARAMETROS
 
 def extrair_dados_do_pdf(arquivo_streamlit):
