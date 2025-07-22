@@ -126,75 +126,125 @@ PARAMETROS = {
 }
 
 def extrair_valores_do_pdf(caminho_pdf):
-    """Extrai valores na ordem exata das colunas do PDF"""
+    """
+    Extrai os valores da 4ª coluna e vincula corretamente aos parâmetros,
+    considerando a estrutura real do PDF.
+    """
     valores_reais = []
-    comecar_coleta = False
     
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
-            text = page.extract_text()
-            lines = text.split('\n')
+            # Configurações para melhor extração de tabelas
+            settings = {
+                "vertical_strategy": "text",
+                "horizontal_strategy": "text",
+                "explicit_vertical_lines": [],
+                "explicit_horizontal_lines": [],
+                "snap_tolerance": 4,
+                "join_tolerance": 4,
+                "edge_min_length": 3
+            }
             
-            for line in lines:
-                if "Item de Teste" in line:
-                    comecar_coleta = True
-                    continue
-                    
-                if comecar_coleta:
-                    parts = [p.strip() for p in line.split('  ') if p.strip()]
-                    if len(parts) >= 4:
-                        valor = parts[3].replace(',', '.')
-                        if valor.replace('.', '', 1).isdigit():
+            tabelas = page.extract_tables(table_settings=settings)
+            
+            for tabela in tabelas:
+                for linha in tabela:
+                    # Pega a 4ª coluna (índice 3) se existir
+                    if len(linha) >= 4:
+                        valor = (linha[3] or "").strip()
+                        # Limpa e converte o valor
+                        valor = valor.replace(",", ".").replace(" ", "")
+                        if valor and valor.replace(".", "", 1).isdigit():
                             valores_reais.append(float(valor))
     
-    # Verificação crítica
-    print(f"Valores extraídos: {len(valores_reais)} (Esperados: {len(PARAMETROS)})")
-    print("Primeiros valores:", valores_reais[:5])
-    
+    # Cria dicionário com os valores encontrados
     return dict(zip(PARAMETROS.keys(), valores_reais[:len(PARAMETROS)]))
 
 def validar_valores(valores):
-    """Validação com tolerância zero a erros"""
+    """
+    Versão corrigida da validação
+    """
     anomalias = []
-    
     for item, valor in valores.items():
-        try:
-            minimo, maximo = PARAMETROS[item]
-            valor_float = float(valor)
-            
-            if not (minimo <= valor_float <= maximo):
-                status = "Abaixo" if valor_float < minimo else "Acima"
-                anomalias.append({
-                    "item": item,
-                    "valor_real": valor_float,
-                    "status": status,
-                    "normal_min": minimo,
-                    "normal_max": maximo
-                })
-        except:
+        if item not in PARAMETROS:
             continue
             
+        try:
+            valor = float(valor) if not isinstance(valor, float) else valor
+            minimo, maximo = PARAMETROS[item]
+            
+            if valor < minimo:
+                status = "Abaixo"
+            elif valor > maximo:
+                status = "Acima"
+            else:
+                continue
+                
+            anomalias.append({
+                "item": item,
+                "valor_real": valor,
+                "status": status,
+                "normal_min": minimo,
+                "normal_max": maximo
+            })
+        except (ValueError, TypeError):
+            continue
+    
     return anomalias
 
-def gerar_relatorio(pdf_path, terapeuta, registro):
+def exportar_para_docx(texto, output_path):
+    """
+    Cria um .docx com o texto dado e salva em output_path.
+    """
+    doc = Document()
+    for line in texto.split("\n"):
+        doc.add_paragraph(line)
+    doc.save(output_path)
+
+def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
     try:
+        # 1) Extrair valores
         valores = extrair_valores_do_pdf(pdf_path)
-        if len(valores) != len(PARAMETROS):
-            raise ValueError("Quantidade de valores incompatível")
-            
+        if not valores:
+            raise ValueError("Nenhum valor foi extraído do PDF. Verifique o formato do arquivo.")
+        
+        # 2) Validar valores
         anomalias = validar_valores(valores)
         
+        # 3) Montar texto do relatório
+        lines = [
+            "Relatório de Anomalias",
+            f"Terapeuta: {terapeuta}   Registro: {registro}",
+            ""
+        ]
+        
         if not anomalias:
-            return "🎉 Todos os parâmetros dentro da normalidade"
+            lines.append("🎉 Todos os parâmetros dentro da normalidade.")
         else:
-            relatorio = ["RELATÓRIO DE ANOMALIAS", ""]
+            lines.append(f"⚠️ {len(anomalias)} anomalias encontradas:")
             for a in anomalias:
-                relatorio.append(
-                    f"{a['item']}: {a['valor_real']:.3f} "
-                    f"({a['status']} do normal; "
-                    f"Normal: {a['normal_min']}–{a['normal_max']})"
+                lines.append(
+                    f"• {a['item']}: {a['valor_real']:.3f}  "
+                    f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
                 )
-            return '\n'.join(relatorio)
-            
+        
+        texto = "\n".join(lines)
+        
+        # 4) Exportar para DOCX
+        exportar_para_docx(texto, output_path)
+        print(f"✅ Relatório gerado: {output_path}")
+        
+        return True, output_path
+        
     except Exception as e:
-        return f"❌ Erro: {str(e)}"
+        print(f"❌ Erro ao gerar relatório: {str(e)}")
+        return False, str(e)
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        print("Uso: python validacao_parametros.py <arquivo.pdf> \"Nome Terapeuta\" \"Registro\"")
+        sys.exit(1)
+    
+    sucesso, resultado = gerar_relatorio(sys.argv[1], sys.argv[2], sys.argv[3])
+    if not sucesso:
+        sys.exit(1)
