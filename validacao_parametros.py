@@ -1,5 +1,5 @@
 # validacao_parametros.py
-
+import sys
 import re
 import pdfplumber
 from io import BytesIO
@@ -125,74 +125,72 @@ PARAMETROS = {
 "Índice de ácidos gordos essenciais": (2.144, 3.238)
 }
 
-import pdfplumber
+INTERVALO_TO_ITEM = {v: k for k, v in PARAMETROS.items()}
 
-def extrair_valores_regex(caminho_pdf):
+
+def extrair_por_regex(caminho_pdf):
     """
-    Lê todo o texto do PDF e aplica regex para capturar
-    min-max valor_real, retornando lista de (min, max, valor_real).
+    Lê todo o texto do PDF e retorna uma lista de tuplas:
+      (item, valor_real, min, max)
+    encontradas pelo padrão 'min - max  valor'
     """
+    # regex: captura 2 números de ponto flutuante separados por '-' e um terceiro número
     pattern = re.compile(r'(\d+\.\d+)\s*-\s*(\d+\.\d+)\s+(\d+[.,]?\d*)')
-    encontrados = []
-
+    
     with pdfplumber.open(caminho_pdf) as pdf:
         texto = "\n".join(page.extract_text() or "" for page in pdf.pages)
 
-    for match in pattern.finditer(texto):
-        min_s, max_s, val_s = match.groups()
+    registros = []
+    for m in pattern.finditer(texto):
+        min_s, max_s, val_s = m.groups()
         i_min = float(min_s)
         i_max = float(max_s)
         valor = float(val_s.replace(",", "."))
-        encontrados.append((i_min, i_max, valor))
+        
+        # tenta mapear ao item conhecido
+        item = INTERVALO_TO_ITEM.get((i_min, i_max))
+        if item:
+            registros.append((item, valor, i_min, i_max))
+    return registros
 
-    return encontrados
 
-def validar_por_intervalo_regex(caminho_pdf):
+def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
     """
-    Para cada tripla extraída por regex, identifica o item
-    pelo (i_min, i_max) e filtra as anomalias.
-    Retorna lista de dicts { item, valor_real, status, normal_min, normal_max }.
+    Extrai via regex, valida e exporta um .docx com as anomalias.
     """
-    # mapeia intervalo->item
-    inv = {v: k for k, v in PARAMETROS.items()}
-    registros = extrair_valores_regex(caminho_pdf)
-    anomalias = []
+    registros = extrair_por_regex(pdf_path)
+    
+    # monta documento
+    doc = Document()
+    doc.add_heading("Relatório de Anomalias", level=1)
+    doc.add_paragraph(f"Terapeuta: {terapeuta}   Registro: {registro}")
+    doc.add_paragraph("")
 
-    for i_min, i_max, valor in registros:
-        chave = (i_min, i_max)
-        item = inv.get(chave)
-        if not item:
-            continue
+    anomalias = 0
+    for item, valor, i_min, i_max in registros:
         if valor < i_min:
             status = "Abaixo"
         elif valor > i_max:
             status = "Acima"
         else:
             continue
-        anomalias.append({
-            "item": item,
-            "valor_real": valor,
-            "status": status,
-            "normal_min": i_min,
-            "normal_max": i_max
-        })
-    return anomalias
+        anomalias += 1
+        doc.add_paragraph(
+            f"• {item}: {valor:.3f}  "
+            f"({status} do normal; Normal: {i_min}–{i_max})"
+        )
 
-def gerar_relatorio_pdf_regex(pdf_path, terapeuta, registro, output_path="relatorio_regex.docx"):
-    anomalias = validar_por_intervalo_regex(pdf_path)
-
-    doc = Document()
-    doc.add_paragraph("Relatório de Anomalias (regex)")
-    doc.add_paragraph(f"Terapeuta: {terapeuta}   Registro: {registro}")
-    doc.add_paragraph("")
-
-    if not anomalias:
+    if anomalias == 0:
         doc.add_paragraph("🎉 Todos os parâmetros dentro da normalidade.")
-    else:
-        for a in anomalias:
-            texto = (f"• {a['item']}: {a['valor_real']}  "
-                     f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})")
-            doc.add_paragraph(texto)
-
+    
     doc.save(output_path)
-    return output_path
+    print(f"✅ Relatório gerado: {output_path}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        print("Uso: python validacao_parametros.py <arquivo.pdf> \"Nome Terapeuta\" \"Registro\"")
+        sys.exit(1)
+
+    pdf_file, nome, reg = sys.argv[1], sys.argv[2], sys.argv[3]
+    gerar_relatorio(pdf_file, nome, reg)
