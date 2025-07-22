@@ -125,62 +125,52 @@ PARAMETROS = {
 "Índice de ácidos gordos essenciais": (2.144, 3.238)
 }
 
+import pdfplumber
+
 def extrair_valores_do_pdf(caminho_pdf):
     """
-    Lê o PDF e retorna dict { item_completo: valor_str } para cada item
-    em PARAMETROS, mesmo quando o nome vem quebrado em duas linhas.
+    Extrai um dict { item: valor_str } unindo corretamente nomes quebrados
+    e lendo apenas a 4ª coluna (Valor Real).
     """
-    import pdfplumber
-
     resultados = {}
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
-            tables = page.extract_tables()
-            for tabela in tables:
-                i = 0
-                while i < len(tabela):
-                    linha = tabela[i]
-                    # garante pelo menos 4 colunas e normaliza
+            for tabela in page.extract_tables():
+                current_item = ""
+                for linha in tabela:
+                    # pula cabeçalho ou linhas curtas
                     if not linha or len(linha) < 4:
-                        i += 1
                         continue
-                    item1 = (linha[1] or "").strip()
-                    valor1 = (linha[3] or "").strip().replace(",", ".")
+
+                    raw_item = (linha[1] or "").strip()
+                    raw_val  = (linha[3] or "").strip().replace(",", ".")
+
                     # ignora cabeçalho
-                    if item1.lower().startswith("item"):
-                        i += 1
+                    if raw_item.lower().startswith("item"):
                         continue
 
-                    # Se item1 é completo
-                    if item1 in PARAMETROS:
-                        # valida valor1
-                        try:
-                            float(valor1)
-                            resultados[item1] = valor1
-                        except:
-                            pass
-                        i += 1
+                    # se não há valor nesta linha, acumulamos nome
+                    if not raw_val or not raw_val.replace(".", "", 1).isdigit():
+                        # adiciona raw_item a current_item
+                        if raw_item:
+                            if current_item:
+                                current_item += " " + raw_item
+                            else:
+                                current_item = raw_item
+                        # aguarda próximas linhas
                         continue
 
-                    # Tenta juntar com a próxima linha
-                    if i+1 < len(tabela):
-                        next_linha = tabela[i+1]
-                        item2 = (next_linha[1] or "").strip()
-                        combinado = f"{item1} {item2}"
-                        if combinado in PARAMETROS:
-                            # pega valor da primeira linha
-                            try:
-                                float(valor1)
-                                resultados[combinado] = valor1
-                            except:
-                                pass
-                            # avançar 2 linhas
-                            i += 2
-                            continue
+                    # aqui temos raw_val válido: montamos o nome completo
+                    if current_item:
+                        item_name = f"{current_item} {raw_item}".strip()
+                    else:
+                        item_name = raw_item
 
-                    # Caso não reconheça, pula
-                    i += 1
+                    # registra
+                    resultados[item_name] = raw_val
 
+                    # reset para próximo item
+                    current_item = ""
     return resultados
 
 
