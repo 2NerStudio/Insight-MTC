@@ -127,29 +127,26 @@ PARAMETROS = {
 
 import pdfplumber
 
-# Cria um mapeamento inverso: (min, max) → nome_item
 INTERVALO_TO_ITEM = {v: k for k, v in PARAMETROS.items()}
 
-def extrair_por_intervalo(caminho_pdf):
+def extrair_por_intervalo(caminho_pdf: str) -> list[tuple[str, float, float, float]]:
     """
-    Lê 3ª (intervalo) e 4ª (valor real) colunas do PDF e
-    devolve lista de tuplas [(item, valor_real, min, max), ...]
-    onde 'item' é inferido pelo intervalo.
+    Retorna lista de tuplas (item, valor_real, min, max) para cada linha do PDF
+    identificada pelo intervalo (3ª coluna) e valor (4ª coluna).
     """
     resultados = []
-
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
             for tabela in page.extract_tables():
                 for linha in tabela:
-                    # normaliza
+                    # precisa ter pelo menos 4 colunas
                     if not linha or len(linha) < 4:
                         continue
-                    raw_intervalo = (linha[2] or "").strip()      # 3ª coluna
-                    raw_val      = (linha[3] or "").strip().replace(",", ".")
+                    raw_intervalo = (linha[2] or "").strip().replace(" ", "")
+                    raw_val      = (linha[3] or "").strip().replace(" ", "").replace(",", ".")
 
-                    # tenta parse intervalo "48.264 - 65.371"
-                    parts = raw_intervalo.replace(" ", "").split("-")
+                    # parse intervalo "min-max"
+                    parts = raw_intervalo.split("-")
                     if len(parts) != 2:
                         continue
                     try:
@@ -158,12 +155,11 @@ def extrair_por_intervalo(caminho_pdf):
                     except:
                         continue
 
-                    # quem tem esse intervalo?
+                    # identifica o item por intervalo
                     key = (i_min, i_max)
-                    if key not in INTERVALO_TO_ITEM:
-                        continue  # intervalo desconhecido
-
-                    item = INTERVALO_TO_ITEM[key]
+                    item = INTERVALO_TO_ITEM.get(key)
+                    if not item:
+                        continue
 
                     # parse valor real
                     try:
@@ -174,16 +170,12 @@ def extrair_por_intervalo(caminho_pdf):
                     resultados.append((item, valor, i_min, i_max))
     return resultados
 
-def gerar_relatorio_por_intervalo(pdf_path, terapeuta, registro, output="relatorio_intervalo.docx"):
-    registros = extrair_por_intervalo(pdf_path)
-
-    linhas = [
-        "Relatório de Anomalias (via intervalo)",
-        f"Terapeuta: {terapeuta}   Registro: {registro}",
-        ""
-    ]
-
-    anomalias = 0
+def validar_por_intervalo(registros: list[tuple[str, float, float, float]]) -> list[dict]:
+    """
+    Filtra registros fora do intervalo, devolvendo lista de:
+    { item, valor_real, status, normal_min, normal_max }
+    """
+    anomalias = []
     for item, valor, i_min, i_max in registros:
         if valor < i_min:
             status = "Abaixo"
@@ -191,20 +183,43 @@ def gerar_relatorio_por_intervalo(pdf_path, terapeuta, registro, output="relator
             status = "Acima"
         else:
             continue
+        anomalias.append({
+            "item": item,
+            "valor_real": valor,
+            "status": status,
+            "normal_min": i_min,
+            "normal_max": i_max
+        })
+    return anomalias
 
-        anomalias += 1
-        linhas.append(
-            f"• {item}: {valor}  "
-            f"({status} do normal; Normal: {i_min}–{i_max})"
-        )
+def gerar_relatorio_por_intervalo(pdf_path: str, terapeuta: str, registro: str, output_path="relatorio_intervalo.docx"):
+    """
+    Extrai, valida e exporta um .docx contendo apenas as anomalias
+    baseadas em intervalo.
+    """
+    registros = extrair_por_intervalo(pdf_path)
+    anomalias = validar_por_intervalo(registros)
 
-    if anomalias == 0:
-        linhas.append("🎉 Todos os parâmetros dentro do intervalo normal.")
-    texto = "\n".join(linhas)
+    # monta texto
+    lines = [
+        "Relatório de Anomalias (via Intervalo)",
+        f"Terapeuta: {terapeuta}   Registro: {registro}",
+        ""
+    ]
 
-    # exporta .docx
+    if not anomalias:
+        lines.append("🎉 Todos os parâmetros dentro da normalidade.")
+    else:
+        for a in anomalias:
+            lines.append(
+                f"• {a['item']}: {a['valor_real']}  "
+                f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
+            )
+
+    texto = "\n".join(lines)
+    # exporta docx
     doc = Document()
     for l in texto.split("\n"):
         doc.add_paragraph(l)
-    doc.save(output)
-    return output
+    doc.save(output_path)
+    return output_path
