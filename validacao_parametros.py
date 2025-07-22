@@ -127,36 +127,62 @@ PARAMETROS = {
 
 def extrair_valores_do_pdf(caminho_pdf):
     """
-    Lê o PDF e retorna dict { item: valor_str } para cada item em PARAMETROS,
-    extraindo a 2ª (Item) e 4ª (Valor Real) colunas da tabela, sem zip.
+    Lê o PDF e retorna dict { item_completo: valor_str } para cada item
+    em PARAMETROS, mesmo quando o nome vem quebrado em duas linhas.
     """
+    import pdfplumber
+
     resultados = {}
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
             tables = page.extract_tables()
             for tabela in tables:
-                for linha in tabela:
-                    # garante 4 colunas
+                i = 0
+                while i < len(tabela):
+                    linha = tabela[i]
+                    # garante pelo menos 4 colunas e normaliza
                     if not linha or len(linha) < 4:
+                        i += 1
                         continue
-
-                    item_cell = (linha[1] or "").strip()
-                    valor_cell = (linha[3] or "").strip().replace(",", ".")
-
+                    item1 = (linha[1] or "").strip()
+                    valor1 = (linha[3] or "").strip().replace(",", ".")
                     # ignora cabeçalho
-                    if item_cell.lower().startswith("item"):
+                    if item1.lower().startswith("item"):
+                        i += 1
                         continue
 
-                    # só grava se for um parâmetro que você definiu
-                    if item_cell in PARAMETROS:
-                        # testa se é número
+                    # Se item1 é completo
+                    if item1 in PARAMETROS:
+                        # valida valor1
                         try:
-                            _ = float(valor_cell)
-                            resultados[item_cell] = valor_cell
+                            float(valor1)
+                            resultados[item1] = valor1
                         except:
                             pass
+                        i += 1
+                        continue
+
+                    # Tenta juntar com a próxima linha
+                    if i+1 < len(tabela):
+                        next_linha = tabela[i+1]
+                        item2 = (next_linha[1] or "").strip()
+                        combinado = f"{item1} {item2}"
+                        if combinado in PARAMETROS:
+                            # pega valor da primeira linha
+                            try:
+                                float(valor1)
+                                resultados[combinado] = valor1
+                            except:
+                                pass
+                            # avançar 2 linhas
+                            i += 2
+                            continue
+
+                    # Caso não reconheça, pula
+                    i += 1
 
     return resultados
+
 
 def validar_valores(valores):
     """
