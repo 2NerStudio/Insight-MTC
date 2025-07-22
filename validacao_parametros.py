@@ -129,48 +129,44 @@ import pdfplumber
 
 def extrair_valores_do_pdf(caminho_pdf):
     """
-    Extrai um dict { item: valor_str } unindo corretamente nomes quebrados
-    e lendo apenas a 4ª coluna (Valor Real).
+    Extrai um dict { item_completo: valor_str } começando
+    apenas após o cabeçalho 'Valor de Medição Real'.
+    Agrupa quebras de linha de nomes automaticamente.
     """
     resultados = {}
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
             for tabela in page.extract_tables():
+                started = False
                 current_item = ""
                 for linha in tabela:
-                    # pula cabeçalho ou linhas curtas
-                    if not linha or len(linha) < 4:
+                    # Normaliza células
+                    cells = [(c or "").strip() for c in linha]
+                    # Se ainda não tivemos o cabeçalho, busca por ele
+                    if not started:
+                        header = " ".join(cells[:4]).lower()
+                        if "valor" in header and "medição" in header and "real" in header:
+                            started = True
+                        continue  # pula até achar o header
+
+                    # A partir daqui, só linhas de dados
+                    # Garante pelo menos 4 colunas
+                    if len(cells) < 4:
                         continue
 
-                    raw_item = (linha[1] or "").strip()
-                    raw_val  = (linha[3] or "").strip().replace(",", ".")
-
-                    # ignora cabeçalho
-                    if raw_item.lower().startswith("item"):
-                        continue
-
-                    # se não há valor nesta linha, acumulamos nome
-                    if not raw_val or not raw_val.replace(".", "", 1).isdigit():
-                        # adiciona raw_item a current_item
+                    raw_item = cells[1]
+                    raw_val  = cells[3].replace(",", ".")
+                    # Se não for número, é continuação de nome
+                    if not raw_val.replace(".", "", 1).isdigit():
                         if raw_item:
-                            if current_item:
-                                current_item += " " + raw_item
-                            else:
-                                current_item = raw_item
-                        # aguarda próximas linhas
+                            current_item = (current_item + " " + raw_item).strip()
                         continue
 
-                    # aqui temos raw_val válido: montamos o nome completo
-                    if current_item:
-                        item_name = f"{current_item} {raw_item}".strip()
-                    else:
-                        item_name = raw_item
-
-                    # registra
+                    # Achamos um valor: montamos o nome
+                    item_name = (current_item + " " + raw_item).strip() if current_item else raw_item
                     resultados[item_name] = raw_val
+                    current_item = ""  # zera p/ próximo
 
-                    # reset para próximo item
-                    current_item = ""
     return resultados
 
 
