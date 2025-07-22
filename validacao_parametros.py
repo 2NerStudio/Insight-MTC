@@ -138,10 +138,13 @@ def extrair_valores_do_pdf(caminho_pdf):
                         valor_real = valor_real.replace(",", ".")
                         intervalo_normal = intervalo_normal.replace(",", ".")
                         
-                        # Extrai apenas o mínimo do intervalo (ex: "48.264 - 65.371" -> 48.264)
+                        # Extrai o mínimo do intervalo (trata ambos os formatos)
                         if " - " in intervalo_normal:
+                            partes = intervalo_normal.split(" - ")
+                            minimo_str = partes[0]
+                            
                             try:
-                                minimo = float(intervalo_normal.split(" - ")[0])
+                                minimo = float(minimo_str)
                                 
                                 # Identifica o parâmetro usando o mínimo como chave
                                 if minimo in PARAMETROS:
