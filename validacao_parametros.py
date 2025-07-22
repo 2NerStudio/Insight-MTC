@@ -1,6 +1,6 @@
 import sys
 import pdfplumber
-from io import BytesIO
+import re
 from docx import Document
 
 PARAMETROS = {
@@ -125,29 +125,32 @@ PARAMETROS = {
 
 def extrair_valores_do_pdf(caminho_pdf):
     """
-    Extrai os valores corretamente associando cada valor ao seu parâmetro.
+    Extrai os valores corretamente, lidando com quebras de linha no PDF.
     """
     valores_reais = {}
     
     with pdfplumber.open(caminho_pdf) as pdf:
+        # Extrai todo o texto do PDF como um bloco contínuo
+        texto_completo = ""
         for page in pdf.pages:
-            text = page.extract_text()
-            lines = text.split('\n')
+            texto_completo += page.extract_text() + "\n"
+        
+        # Remove quebras de linha artificiais para facilitar a busca
+        texto_completo = texto_completo.replace("\n", " ")
+        
+        # Procura cada parâmetro no texto e extrai o valor seguinte
+        for parametro in PARAMETROS.keys():
+            # Padrão para encontrar o parâmetro seguido de um número (valor)
+            padrao = re.compile(rf"{re.escape(parametro)}\s*([\d,\.]+)")
+            correspondencia = padrao.search(texto_completo)
             
-            for line in lines:
-                # Verifica se a linha contém um parâmetro conhecido
-                for parametro in PARAMETROS.keys():
-                    if parametro in line:
-                        # Extrai o valor real (assumindo que está após o parâmetro)
-                        partes = line.split()
-                        for i, parte in enumerate(partes):
-                            if parte == parametro:
-                                # O valor real pode estar em uma posição relativa
-                                valor_str = partes[i + 1] if i + 1 < len(partes) else None
-                                if valor_str and valor_str.replace(".", "").replace(",", "").isdigit():
-                                    valor = float(valor_str.replace(",", "."))
-                                    valores_reais[parametro] = valor
-                                break
+            if correspondencia:
+                valor_str = correspondencia.group(1).replace(",", ".")
+                try:
+                    valor = float(valor_str)
+                    valores_reais[parametro] = valor
+                except ValueError:
+                    continue
     
     return valores_reais
 
