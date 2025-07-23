@@ -1,12 +1,12 @@
 import sys
 import pdfplumber
+import re
 from io import BytesIO
 from docx import Document
 
-def extrair_parametros_e_valores(caminho_pdf):
-    """Extrai os intervalos normais (3ª coluna) e valores medidos (4ª coluna) com tratamento robusto"""
+def extrair_parametros_do_pdf(caminho_pdf):
+    """Extrai os parâmetros e seus intervalos de referência da 3ª coluna"""
     parametros = {}
-    valores_medidos = {}
     
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
@@ -21,50 +21,60 @@ def extrair_parametros_e_valores(caminho_pdf):
             
             for tabela in tabelas:
                 for linha in tabela:
-                    # Verificação segura de colunas e valores
-                    try:
-                        # Garante que temos pelo menos 4 colunas e que não são None
-                        if len(linha) < 4:
-                            continue
-                            
-                        item = linha[1] if linha[1] is not None else ""
-                        intervalo = linha[2] if linha[2] is not None else ""
-                        valor = linha[3] if linha[3] is not None else ""
+                    # Pega o nome do parâmetro (2ª coluna) e intervalo de referência (3ª coluna)
+                    if len(linha) >= 3:
+                        nome_parametro = linha[1].strip() if linha[1] else None
+                        intervalo = linha[2].strip() if linha[2] else ""
                         
-                        # Limpeza dos valores
-                        item = item.strip()
-                        intervalo = intervalo.strip()
-                        valor = valor.strip()
-                        
-                        if not item or not intervalo or not valor:
-                            continue
-                            
-                        # Processa o intervalo normal (3ª coluna)
-                        intervalo = (intervalo.replace("\n", " ")
-                                     .replace(",", ".")
-                                     .replace(" ", ""))
-                        
-                        if " - " in intervalo or "-" in intervalo:
-                            # Trata ambos os formatos "X.XXX - Y.YYY" e "X.XXX-Y.YYY"
-                            separador = " - " if " - " in intervalo else "-"
-                            minimo, maximo = map(float, intervalo.split(separador))
-                            
-                            # Processa o valor medido (4ª coluna)
-                            valor = (valor.replace(",", ".")
-                                      .replace(" ", "")
+                        if nome_parametro and intervalo:
+                            # Limpeza e processamento do intervalo
+                            intervalo = (intervalo.replace(",", ".")
                                       .replace("\n", "")
-                                      .replace("'", ""))
+                                      .replace(" ", ""))
                             
-                            if valor.replace(".", "", 1).isdigit():
-                                parametros[item] = (minimo, maximo)
-                                valores_medidos[item] = float(valor)
-                    except (ValueError, AttributeError):
-                        continue
+                            # Extrai os valores mínimo e máximo usando regex
+                            match = re.match(r"([\d.]+)\-([\d.]+)", intervalo)
+                            if match:
+                                minimo = float(match.group(1))
+                                maximo = float(match.group(2))
+                                parametros[nome_parametro] = (minimo, maximo)
     
-    return parametros, valores_medidos
+    return parametros
+
+def extrair_valores_do_pdf(caminho_pdf):
+    """Extrai os valores medidos da 4ª coluna"""
+    valores = {}
+    
+    with pdfplumber.open(caminho_pdf) as pdf:
+        for page in pdf.pages:
+            table_settings = {
+                "vertical_strategy": "lines",
+                "horizontal_strategy": "lines",
+                "intersection_y_tolerance": 10
+            }
+            
+            tabelas = page.extract_tables(table_settings)
+            
+            for tabela in tabelas:
+                for linha in tabela:
+                    if len(linha) >= 4:
+                        nome_parametro = linha[1].strip() if linha[1] else None
+                        valor_medido = linha[3].strip() if linha[3] else ""
+                        
+                        if nome_parametro and valor_medido:
+                            # Limpeza do valor medido
+                            valor_medido = (valor_medido.replace(",", ".")
+                                          .replace(" ", "")
+                                          .replace("\n", "")
+                                          .replace("'", ""))
+                            
+                            if valor_medido.replace(".", "", 1).isdigit():
+                                valores[nome_parametro] = float(valor_medido)
+    
+    return valores
 
 def validar_valores(parametros, valores):
-    """Validação rigorosa usando os parâmetros extraídos"""
+    """Valida os valores medidos contra os intervalos de referência"""
     anomalias = []
     
     for item, valor in valores.items():
@@ -84,7 +94,7 @@ def validar_valores(parametros, valores):
     return anomalias
 
 def exportar_para_docx(texto, output_path):
-    """Cria um .docx com o texto dado e salva em output_path"""
+    """Cria um .docx com o texto dado"""
     doc = Document()
     for line in texto.split("\n"):
         doc.add_paragraph(line)
@@ -92,15 +102,20 @@ def exportar_para_docx(texto, output_path):
 
 def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
     try:
-        # 1) Extrair parâmetros e valores
-        parametros, valores = extrair_parametros_e_valores(pdf_path)
-        if not parametros or not valores:
-            raise ValueError("Nenhum parâmetro ou valor válido foi extraído do PDF.")
+        # 1) Extrair parâmetros e seus intervalos
+        parametros = extrair_parametros_do_pdf(pdf_path)
+        if not parametros:
+            raise ValueError("Nenhum parâmetro foi encontrado no PDF. Verifique o formato do arquivo.")
         
-        # 2) Validar valores
+        # 2) Extrair valores medidos
+        valores = extrair_valores_do_pdf(pdf_path)
+        if not valores:
+            raise ValueError("Nenhum valor medido foi encontrado no PDF.")
+        
+        # 3) Validar valores
         anomalias = validar_valores(parametros, valores)
         
-        # 3) Montar texto do relatório
+        # 4) Montar relatório
         lines = [
             "Relatório de Anomalias",
             f"Terapeuta: {terapeuta}   Registro: {registro}",
@@ -120,7 +135,7 @@ def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomal
         
         texto = "\n".join(lines)
         
-        # 4) Exportar para DOCX
+        # 5) Exportar para DOCX
         exportar_para_docx(texto, output_path)
         print(f"✅ Relatório gerado: {output_path}")
         
