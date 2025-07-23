@@ -1,9 +1,9 @@
 import streamlit as st
 import tempfile
 import os
-from validacao_parametros import extrair_valores_do_pdf, validar_valores, gerar_relatorio
+import subprocess
 
-from docx2pdf import convert
+from validacao_parametros import extrair_valores_do_pdf, validar_valores, gerar_relatorio
 
 # ========================================
 # LOGIN SIMPLES
@@ -40,7 +40,7 @@ if st.sidebar.button("Sair"):
     st.experimental_rerun()
 
 st.title("🌿 MTC Insight Pro")
-st.caption("Suporta PDF e DOCX (auto‑converte para PDF) e valida parâmetros")
+st.caption("Suporta PDF e DOCX (via LibreOffice) e valida parâmetros")
 
 # Terapeuta
 st.subheader("🧑‍⚕️ Informações do Terapeuta")
@@ -58,27 +58,28 @@ if st.button("⚙️ Validar Parâmetros"):
         st.warning("⚠️ Envie um arquivo PDF ou DOCX.")
     else:
         with st.spinner("🔍 Processando..."):
-            # grava upload em temp
+            # 1) Salva upload em arquivo temporário
             ext = os.path.splitext(arquivo.name)[1].lower()
-            # caminho temporário para PDF de entrada
             tmp_input = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
             tmp_input.write(arquivo.read())
             tmp_input.close()
 
-            # se for DOCX, converte para PDF
+            # 2) Se for DOCX, converte para PDF com LibreOffice
             if ext == ".docx":
                 tmp_pdf = tmp_input.name.replace(".docx", ".pdf")
-                convert(tmp_input.name, tmp_pdf)
+                subprocess.run([
+                    "libreoffice", "--headless", "--convert-to", "pdf", tmp_input.name,
+                    "--outdir", os.path.dirname(tmp_input.name)
+                ], check=True)
                 pdf_path = tmp_pdf
             else:
                 pdf_path = tmp_input.name
 
-            # 1) extrai valores do PDF
+            # 3) Extrai e valida
             valores = extrair_valores_do_pdf(pdf_path)
-            # 2) valida
             anomalias = validar_valores(valores)
 
-        # exibição
+        # Exibe resultado
         if not anomalias:
             st.success("🎉 Todos os parâmetros estão dentro do intervalo normal.")
         else:
@@ -89,7 +90,7 @@ if st.button("⚙️ Validar Parâmetros"):
                     f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
                 )
 
-            # Gera e oferece download do .docx de anomalias
+            # 4) Gera e oferece download do .docx final
             output_path = os.path.join(tempfile.gettempdir(), "relatorio_anomalias.docx")
             gerar_relatorio(pdf_path, nome_terapeuta, registro_terapeuta, output_path)
             with open(output_path, "rb") as f:
@@ -100,7 +101,7 @@ if st.button("⚙️ Validar Parâmetros"):
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
 
-        # limpa temporários
+        # 5) Limpeza
         os.unlink(tmp_input.name)
         if ext == ".docx" and os.path.exists(pdf_path):
             os.unlink(pdf_path)
