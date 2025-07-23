@@ -5,26 +5,29 @@ from io import BytesIO
 from docx import Document
 
 def extrair_parametros_do_pdf(caminho_pdf):
-    """Extrai os parâmetros e seus intervalos de referência da 3ª coluna"""
+    """Extrai os parâmetros e seus intervalos de referência com melhor tratamento dos nomes"""
     parametros = {}
     
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
             # Configuração otimizada para tabelas com bordas visíveis
             table_settings = {
-                "vertical_strategy": "lines",
-                "horizontal_strategy": "lines",
-                "intersection_y_tolerance": 10
+                "vertical_strategy": "text",  # Alterado para "text" para melhor captura
+                "horizontal_strategy": "text",
+                "intersection_y_tolerance": 15
             }
             
             tabelas = page.extract_tables(table_settings)
             
             for tabela in tabelas:
                 for linha in tabela:
-                    # Pega o nome do parâmetro (2ª coluna) e intervalo de referência (3ª coluna)
-                    if len(linha) >= 3:
-                        nome_parametro = linha[1].strip() if linha[1] else None
-                        intervalo = linha[2].strip() if linha[2] else ""
+                    # Verifica se a linha tem pelo menos 4 colunas (nome, item de teste, intervalo, valor)
+                    if len(linha) >= 4:
+                        # O nome completo do parâmetro pode estar combinado nas colunas 0 e 1
+                        nome_parametro = (linha[0] or "") + " " + (linha[1] or "")
+                        nome_parametro = nome_parametro.strip()
+                        
+                        intervalo = linha[2].strip() if len(linha) > 2 and linha[2] else ""
                         
                         if nome_parametro and intervalo:
                             # Limpeza e processamento do intervalo
@@ -42,15 +45,15 @@ def extrair_parametros_do_pdf(caminho_pdf):
     return parametros
 
 def extrair_valores_do_pdf(caminho_pdf):
-    """Extrai os valores medidos da 4ª coluna"""
+    """Extrai os valores medidos com tratamento melhorado dos nomes"""
     valores = {}
     
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
             table_settings = {
-                "vertical_strategy": "lines",
-                "horizontal_strategy": "lines",
-                "intersection_y_tolerance": 10
+                "vertical_strategy": "text",
+                "horizontal_strategy": "text",
+                "intersection_y_tolerance": 15
             }
             
             tabelas = page.extract_tables(table_settings)
@@ -58,8 +61,11 @@ def extrair_valores_do_pdf(caminho_pdf):
             for tabela in tabelas:
                 for linha in tabela:
                     if len(linha) >= 4:
-                        nome_parametro = linha[1].strip() if linha[1] else None
-                        valor_medido = linha[3].strip() if linha[3] else ""
+                        # Combina as primeiras colunas para obter o nome completo
+                        nome_parametro = (linha[0] or "") + " " + (linha[1] or "")
+                        nome_parametro = nome_parametro.strip()
+                        
+                        valor_medido = linha[3].strip() if len(linha) > 3 and linha[3] else ""
                         
                         if nome_parametro and valor_medido:
                             # Limpeza do valor medido
@@ -120,6 +126,7 @@ def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomal
             "Relatório de Anomalias",
             f"Terapeuta: {terapeuta}   Registro: {registro}",
             f"Total de parâmetros analisados: {len(parametros)}",
+            f"Total de valores medidos: {len(valores)}",
             ""
         ]
         
@@ -132,6 +139,11 @@ def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomal
                     f"• {a['item']}: {a['valor_real']:.3f}  "
                     f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
                 )
+        
+        # Adiciona lista completa de parâmetros para debug
+        lines.extend(["", "Lista completa de parâmetros extraídos:", ""])
+        for param, (min_val, max_val) in parametros.items():
+            lines.append(f"- {param}: {min_val} - {max_val}")
         
         texto = "\n".join(lines)
         
