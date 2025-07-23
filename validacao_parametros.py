@@ -1,152 +1,204 @@
-import sys
 import pdfplumber
 import re
-from io import BytesIO
 from docx import Document
+from typing import Dict, Tuple, List, Union
 
-def extrair_parametros_e_valores(caminho_pdf):
-    """Extrai parâmetros e valores com estratégias robustas"""
-    dados = {'parametros': {}, 'valores': {}}
+def extract_patient_info(text: str) -> Dict[str, str]:
+    """Extracts patient information from the header"""
+    patient_info = {
+        'nome': 'N/A',
+        'sexo': 'N/A',
+        'idade': 'N/A',
+        'data_exame': 'N/A'
+    }
     
-    with pdfplumber.open(caminho_pdf) as pdf:
-        for page in pdf.pages:
-            # Primeiro tentamos extrair texto cru para análise
-            texto = page.extract_text()
-            
-            # Padrão para encontrar linhas de resultados (ajuste conforme seu PDF)
-            padrao = re.compile(
-                r'(?P<nome>.+?)\s+'  # Nome do parâmetro
-                r'(?P<valor>\d+[\.,]\d+)\s+'  # Valor medido
-                r'(?P<unidade>\w*)\s*'  # Unidade (opcional)
-                r'(?P<intervalo>[\d\.,]+\s*[-–]\s*[\d\.,]+)'  # Intervalo de referência
-            )
-            
-            for match in padrao.finditer(texto):
-                nome = match.group('nome').strip()
-                valor = float(match.group('valor').replace(',', '.'))
-                intervalo = match.group('intervalo').replace(',', '.').replace(' ', '')
-                
-                # Processa intervalo
-                minimo, maximo = map(float, re.split(r'[-–]', intervalo))
-                
-                dados['parametros'][nome] = (minimo, maximo)
-                dados['valores'][nome] = valor
-            
-            # Se não encontrou no texto, tenta tabelas com estratégia mais flexível
-            if not dados['parametros']:
-                tabelas = page.extract_tables({
-                    "vertical_strategy": "text", 
-                    "horizontal_strategy": "text"
-                })
-                
-                for tabela in tabelas:
-                    for linha in tabela:
-                        if len(linha) >= 4:
-                            nome = (linha[1] or '').strip()
-                            intervalo = (linha[2] or '').replace(',', '.').replace('\n', '').strip()
-                            valor = (linha[3] or '').replace(',', '.').strip()
-                            
-                            if nome and intervalo and valor:
-                                # Processa intervalo
-                                match = re.search(r'(\d+\.?\d*)\s*[-–]\s*(\d+\.?\d*)', intervalo)
-                                if match:
-                                    minimo, maximo = map(float, match.groups())
-                                    try:
-                                        valor_float = float(valor)
-                                        dados['parametros'][nome] = (minimo, maximo)
-                                        dados['valores'][nome] = valor_float
-                                    except ValueError:
-                                        continue
+    # Extract name, gender and age
+    name_match = re.search(r"Nome:\s*(.+?)\s*\|Sexo:\s*(.+?)\s*\|Idade:\s*(\d+)", text)
+    if name_match:
+        patient_info.update({
+            'nome': name_match.group(1).strip(),
+            'sexo': name_match.group(2).strip(),
+            'idade': name_match.group(3).strip()
+        })
     
-    return dados
+    # Extract exam date
+    date_match = re.search(r"Período do teste:\s*(\d{4}/\d{2}/\d{2}\s*\d{2}:\d{2})", text)
+    if date_match:
+        patient_info['data_exame'] = date_match.group(1).strip()
+    
+    return patient_info
 
-def validar_valores(parametros, valores):
-    """Valida os valores medidos contra os intervalos de referência"""
-    anomalias = []
-    
-    for item, valor in valores.items():
-        if item in parametros:
-            minimo, maximo = parametros[item]
-            
-            if not (minimo <= valor <= maximo):
-                status = "Abaixo" if valor < minimo else "Acima"
-                anomalias.append({
-                    "item": item,
-                    "valor_real": valor,
-                    "status": status,
-                    "normal_min": minimo,
-                    "normal_max": maximo
-                })
-    
-    return anomalias
+def clean_text(text: str) -> str:
+    """Cleans and normalizes text for processing"""
+    text = re.sub(r'\n+', ' ', text)  # Replace multiple newlines with space
+    text = re.sub(r'\s+', ' ', text)  # Replace multiple spaces with single space
+    text = re.sub(r'-\s+', '', text)  # Join hyphenated words
+    return text.strip()
 
-def exportar_para_docx(texto, output_path):
-    """Cria um .docx com o texto dado"""
+def extract_exam_data(text: str) -> Dict[str, Dict[str, Union[Tuple[float, float], float, str]]]:
+    """Extracts exam parameters and values from the text"""
+    data = {'parametros': {}, 'valores': {}}
+    
+    # Improved pattern to match exam items
+    pattern = re.compile(
+        r'(?P<sistema>.+?)\s*\n'  # System (may be on previous line)
+        r'(?P<item>.+?)\s+'       # Test item
+        r'(?P<intervalo>\d+[\.,]\d+\s*[-–]\s*\d+[\.,]\d+)\s+'  # Reference range
+        r'(?P<valor>\d+[\.,]\d+)\s*'  # Measured value
+        r'(?P<conselho>.*?)(?=\n\s*[A-ZÀ-Ú]|\Z)',  # Advice (until next item or end)
+        re.MULTILINE | re.DOTALL
+    )
+    
+    for match in pattern.finditer(text):
+        system = clean_text(match.group('sistema'))
+        item = clean_text(match.group('item'))
+        range_vals = match.group('intervalo').replace(',', '.').replace(' ', '')
+        value = match.group('valor').replace(',', '.')
+        advice = clean_text(match.group('conselho'))
+        
+        try:
+            min_val, max_val = map(float, re.split(r'[-–]', range_vals))
+            float_value = float(value)
+            
+            key = f"{system} | {item}"
+            data['parametros'][key] = (min_val, max_val, advice)
+            data['valores'][key] = float_value
+        except (ValueError, TypeError):
+            continue
+    
+    return data
+
+def analyze_results(data: Dict) -> Dict:
+    """Analyzes results and identifies anomalies"""
+    anomalies = []
+    normal = []
+    
+    for key, value in data['valores'].items():
+        if key in data['parametros']:
+            min_val, max_val, advice = data['parametros'][key]
+            
+            status = "DENTRO"
+            if value < min_val:
+                status = "ABAIXO"
+            elif value > max_val:
+                status = "ACIMA"
+            
+            result = {
+                'parametro': key,
+                'valor': value,
+                'intervalo': f"{min_val:.3f} - {max_val:.3f}",
+                'status': status,
+                'conselho': advice if status != "DENTRO" else ""
+            }
+            
+            if status != "DENTRO":
+                anomalies.append(result)
+            else:
+                normal.append(result)
+    
+    return {
+        'anomalias': anomalies,
+        'normais': normal,
+        'total_parametros': len(data['valores']),
+        'total_anomalias': len(anomalies)
+    }
+
+def create_report(data: Dict, analysis: Dict, output_path: str = "Relatorio_Exames.docx") -> str:
+    """Creates a comprehensive report in Word format"""
     doc = Document()
-    for line in texto.split("\n"):
-        doc.add_paragraph(line)
+    
+    # Header
+    doc.add_heading('RELATÓRIO DE ANÁLISE DE EXAMES', level=1)
+    
+    # Patient information
+    patient = data.get('paciente', {})
+    doc.add_paragraph(f"Paciente: {patient.get('nome', 'N/A')}")
+    doc.add_paragraph(f"Sexo: {patient.get('sexo', 'N/A')} | Idade: {patient.get('idade', 'N/A')}")
+    doc.add_paragraph(f"Data do Exame: {patient.get('data_exame', 'N/A')}")
+    doc.add_paragraph("\n")
+    
+    # Summary
+    doc.add_heading('RESUMO', level=2)
+    doc.add_paragraph(f"Total de Parâmetros Analisados: {analysis['total_parametros']}")
+    doc.add_paragraph(f"Anomalias Detectadas: {analysis['total_anomalias']}")
+    doc.add_paragraph(f"Percentual de Anomalias: {analysis['total_anomalias']/analysis['total_parametros']:.1%}")
+    doc.add_paragraph("\n")
+    
+    # Anomalies table
+    if analysis['anomalias']:
+        doc.add_heading('PARÂMETROS COM ANOMALIAS', level=2)
+        table = doc.add_table(rows=1, cols=5)
+        table.style = 'Table Grid'
+        
+        # Header
+        hdr_cells = table.rows[0].cells
+        hdr_cells[0].text = 'Parâmetro'
+        hdr_cells[1].text = 'Valor'
+        hdr_cells[2].text = 'Intervalo Normal'
+        hdr_cells[3].text = 'Status'
+        hdr_cells[4].text = 'Recomendações'
+        
+        # Add rows
+        for item in analysis['anomalias']:
+            row_cells = table.add_row().cells
+            row_cells[0].text = item['parametro']
+            row_cells[1].text = f"{item['valor']:.3f}"
+            row_cells[2].text = item['intervalo']
+            row_cells[3].text = item['status']
+            row_cells[4].text = item['conselho']
+    
+    doc.add_paragraph("\n")
+    
+    # Normal results summary
+    if analysis['normais']:
+        doc.add_heading('PARÂMETROS NORMAIS', level=2)
+        doc.add_paragraph(f"Total de parâmetros dentro da normalidade: {len(analysis['normais'])}")
+    
+    # Footer
+    doc.add_paragraph("\n\n")
+    doc.add_paragraph("Este relatório foi gerado automaticamente com base nos dados extraídos do exame.")
+    doc.add_paragraph("Os resultados devem ser interpretados por um profissional de saúde qualificado.")
+    
     doc.save(output_path)
+    return output_path
 
-def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
+def process_pdf_report(pdf_path: str) -> str:
+    """Main function to process the PDF and generate report"""
     try:
-        # 1) Extrair dados do PDF
-        dados = extrair_parametros_e_valores(pdf_path)
-        parametros = dados['parametros']
-        valores = dados['valores']
+        # Extract data from PDF
+        with pdfplumber.open(pdf_path) as pdf:
+            full_text = "\n".join([page.extract_text() for page in pdf.pages])
         
-        if not parametros:
-            raise ValueError("Nenhum parâmetro foi encontrado no PDF.")
-        if not valores:
-            raise ValueError("Nenhum valor medido foi encontrado no PDF.")
+        patient_data = extract_patient_info(full_text)
+        exam_data = extract_exam_data(full_text)
         
-        # 2) Validar valores
-        anomalias = validar_valores(parametros, valores)
+        if not exam_data['valores']:
+            raise ValueError("Não foi possível extrair dados dos exames do PDF.")
         
-        # 3) Montar relatório
-        lines = [
-            "Relatório de Anomalias - Análise Completa",
-            f"Terapeuta: {terapeuta}   Registro: {registro}",
-            f"Total de parâmetros identificados: {len(parametros)}",
-            f"Total de valores analisados: {len(valores)}",
-            ""
-        ]
+        exam_data['paciente'] = patient_data
+        analysis = analyze_results(exam_data)
         
-        if not anomalias:
-            lines.append("✅ Todos os parâmetros dentro dos intervalos normais.")
-        else:
-            lines.append(f"⚠️ ATENÇÃO: {len(anomalias)} anomalias detectadas:")
-            for idx, a in enumerate(anomalias, 1):
-                lines.append(
-                    f"{idx}. {a['item']}: {a['valor_real']:.3f} "
-                    f"(Valor {a['status']} do normal: {a['normal_min']}–{a['normal_max']})"
-                )
+        # Generate report filename based on patient name
+        report_name = f"Relatorio_{patient_data['nome'].replace(' ', '_')}.docx"
+        report_path = create_report(exam_data, analysis, report_name)
         
-        # Adiciona resumo estatístico
-        lines.extend([
-            "",
-            "Resumo Estatístico:",
-            f"- Parâmetros dentro do normal: {len(valores)-len(anomalias)}/{len(valores)}",
-            f"- Percentual de anomalias: {len(anomalias)/len(valores):.1%}",
-            ""
-        ])
-        
-        texto = "\n".join(lines)
-        
-        # 4) Exportar para DOCX
-        exportar_para_docx(texto, output_path)
-        print(f"✅ Relatório gerado com sucesso: {output_path}")
-        
-        return True, output_path
-        
+        print(f"Relatório gerado com sucesso: {report_path}")
+        return report_path
+    
     except Exception as e:
-        print(f"❌ Falha ao gerar relatório: {str(e)}")
-        return False, str(e)
+        print(f"Erro ao processar o relatório: {str(e)}")
+        raise
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        print("Uso correto: python analise_saude.py <arquivo.pdf> \"Nome Terapeuta\" \"Registro\"")
+    import sys
+    if len(sys.argv) != 2:
+        print("Uso: python analisador_exames.py <caminho_do_pdf>")
         sys.exit(1)
     
-    sucesso, resultado = gerar_relatorio(sys.argv[1], sys.argv[2], sys.argv[3])
-    if not sucesso:
+    pdf_file = sys.argv[1]
+    try:
+        report_file = process_pdf_report(pdf_file)
+        print(f"Relatório salvo como: {report_file}")
+    except Exception as e:
+        print(f"Falha ao gerar relatório: {e}")
         sys.exit(1)
