@@ -2,11 +2,8 @@ import streamlit as st
 import tempfile
 import os
 import subprocess
-from validacao_parametros import (
-    extrair_dados_pdf,
-    gerar_relatorio_anomalias,
-    analyze_results
-)
+from validacao_parametros import extrair_dados_pdf, gerar_relatorio_anomalias, analyze_results
+
 
 # ========================================
 # CONFIGURAÇÃO INICIAL E LOGIN
