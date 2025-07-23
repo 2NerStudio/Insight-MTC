@@ -3,7 +3,7 @@ import tempfile
 import os
 import pdfplumber
 
-from analisador_exames import (
+from validacao_parametros import (
     extract_patient_info,
     extract_exam_data,
     analyze_results,
