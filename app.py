@@ -175,7 +175,7 @@ if st.button("⚙️ Validar Parâmetros", type="primary"):
                     st.success("🎉 Todos os parâmetros estão dentro dos intervalos normais!")
                 else:
                     # Tabela de anomalias com recomendações
-                    st.error(f"⚠️ {len(analise['anomalias']} parâmetros fora do intervalo normal")
+                    st.error(f"⚠️ {len(analise['anomalias'])} parâmetros fora do intervalo normal")
                     
                     # Agrupa por sistema para melhor organização
                     sistemas = {}
