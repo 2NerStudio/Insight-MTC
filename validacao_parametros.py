@@ -4,80 +4,46 @@ import re
 from io import BytesIO
 from docx import Document
 
-def extrair_parametros_do_pdf(caminho_pdf):
-    """Extrai os parâmetros e seus intervalos de referência com melhor tratamento dos nomes"""
-    parametros = {}
+def extrair_parametros_e_valores(caminho_pdf):
+    """Extrai tanto os parâmetros (nome + intervalo) quanto os valores medidos"""
+    dados = {'parametros': {}, 'valores': {}}
     
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
-            # Configuração otimizada para tabelas com bordas visíveis
+            # Configuração para tabelas com bordas visíveis
             table_settings = {
-                "vertical_strategy": "text",  # Alterado para "text" para melhor captura
-                "horizontal_strategy": "text",
-                "intersection_y_tolerance": 15
+                "vertical_strategy": "lines",
+                "horizontal_strategy": "lines",
+                "intersection_y_tolerance": 10,
+                "explicit_vertical_lines": page.curves + page.edges,
+                "explicit_horizontal_lines": page.curves + page.edges
             }
             
             tabelas = page.extract_tables(table_settings)
             
             for tabela in tabelas:
                 for linha in tabela:
-                    # Verifica se a linha tem pelo menos 4 colunas (nome, item de teste, intervalo, valor)
                     if len(linha) >= 4:
-                        # O nome completo do parâmetro pode estar combinado nas colunas 0 e 1
-                        nome_parametro = (linha[0] or "") + " " + (linha[1] or "")
-                        nome_parametro = nome_parametro.strip()
+                        # Extrai nome do parâmetro (2ª coluna)
+                        nome_parametro = linha[1].strip() if linha[1] else None
                         
-                        intervalo = linha[2].strip() if len(linha) > 2 and linha[2] else ""
-                        
-                        if nome_parametro and intervalo:
-                            # Limpeza e processamento do intervalo
-                            intervalo = (intervalo.replace(",", ".")
-                                      .replace("\n", "")
-                                      .replace(" ", ""))
-                            
-                            # Extrai os valores mínimo e máximo usando regex
-                            match = re.match(r"([\d.]+)\-([\d.]+)", intervalo)
-                            if match:
+                        # Extrai intervalo de referência (3ª coluna)
+                        if linha[2]:
+                            intervalo = linha[2].replace(",", ".").replace("\n", "").strip()
+                            # Procura por padrão "X.XXX - Y.YYY" ou "X.XXX-Y.YYY"
+                            match = re.search(r"(\d+\.?\d*)\s*[-–]\s*(\d+\.?\d*)", intervalo)
+                            if match and nome_parametro:
                                 minimo = float(match.group(1))
                                 maximo = float(match.group(2))
-                                parametros[nome_parametro] = (minimo, maximo)
-    
-    return parametros
-
-def extrair_valores_do_pdf(caminho_pdf):
-    """Extrai os valores medidos com tratamento melhorado dos nomes"""
-    valores = {}
-    
-    with pdfplumber.open(caminho_pdf) as pdf:
-        for page in pdf.pages:
-            table_settings = {
-                "vertical_strategy": "text",
-                "horizontal_strategy": "text",
-                "intersection_y_tolerance": 15
-            }
-            
-            tabelas = page.extract_tables(table_settings)
-            
-            for tabela in tabelas:
-                for linha in tabela:
-                    if len(linha) >= 4:
-                        # Combina as primeiras colunas para obter o nome completo
-                        nome_parametro = (linha[0] or "") + " " + (linha[1] or "")
-                        nome_parametro = nome_parametro.strip()
+                                dados['parametros'][nome_parametro] = (minimo, maximo)
                         
-                        valor_medido = linha[3].strip() if len(linha) > 3 and linha[3] else ""
-                        
-                        if nome_parametro and valor_medido:
-                            # Limpeza do valor medido
-                            valor_medido = (valor_medido.replace(",", ".")
-                                          .replace(" ", "")
-                                          .replace("\n", "")
-                                          .replace("'", ""))
-                            
-                            if valor_medido.replace(".", "", 1).isdigit():
-                                valores[nome_parametro] = float(valor_medido)
+                        # Extrai valor medido (4ª coluna)
+                        if nome_parametro and linha[3]:
+                            valor = linha[3].replace(",", ".").strip()
+                            if valor.replace(".", "", 1).isdigit():
+                                dados['valores'][nome_parametro] = float(valor)
     
-    return valores
+    return dados
 
 def validar_valores(parametros, valores):
     """Valida os valores medidos contra os intervalos de referência"""
@@ -108,58 +74,62 @@ def exportar_para_docx(texto, output_path):
 
 def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
     try:
-        # 1) Extrair parâmetros e seus intervalos
-        parametros = extrair_parametros_do_pdf(pdf_path)
-        if not parametros:
-            raise ValueError("Nenhum parâmetro foi encontrado no PDF. Verifique o formato do arquivo.")
+        # 1) Extrair dados do PDF
+        dados = extrair_parametros_e_valores(pdf_path)
+        parametros = dados['parametros']
+        valores = dados['valores']
         
-        # 2) Extrair valores medidos
-        valores = extrair_valores_do_pdf(pdf_path)
+        if not parametros:
+            raise ValueError("Nenhum parâmetro foi encontrado no PDF.")
         if not valores:
             raise ValueError("Nenhum valor medido foi encontrado no PDF.")
         
-        # 3) Validar valores
+        # 2) Validar valores
         anomalias = validar_valores(parametros, valores)
         
-        # 4) Montar relatório
+        # 3) Montar relatório
         lines = [
-            "Relatório de Anomalias",
+            "Relatório de Anomalias - Análise Completa",
             f"Terapeuta: {terapeuta}   Registro: {registro}",
-            f"Total de parâmetros analisados: {len(parametros)}",
-            f"Total de valores medidos: {len(valores)}",
+            f"Total de parâmetros identificados: {len(parametros)}",
+            f"Total de valores analisados: {len(valores)}",
             ""
         ]
         
         if not anomalias:
-            lines.append("🎉 Todos os parâmetros dentro da normalidade.")
+            lines.append("✅ Todos os parâmetros dentro dos intervalos normais.")
         else:
-            lines.append(f"⚠️ {len(anomalias)} anomalias encontradas:")
-            for a in anomalias:
+            lines.append(f"⚠️ ATENÇÃO: {len(anomalias)} anomalias detectadas:")
+            for idx, a in enumerate(anomalias, 1):
                 lines.append(
-                    f"• {a['item']}: {a['valor_real']:.3f}  "
-                    f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
+                    f"{idx}. {a['item']}: {a['valor_real']:.3f} "
+                    f"(Valor {a['status']} do normal: {a['normal_min']}–{a['normal_max']})"
                 )
         
-        # Adiciona lista completa de parâmetros para debug
-        lines.extend(["", "Lista completa de parâmetros extraídos:", ""])
-        for param, (min_val, max_val) in parametros.items():
-            lines.append(f"- {param}: {min_val} - {max_val}")
+        # Adiciona resumo estatístico
+        lines.extend([
+            "",
+            "Resumo Estatístico:",
+            f"- Parâmetros dentro do normal: {len(valores)-len(anomalias)}/{len(valores)}",
+            f"- Percentual de anomalias: {len(anomalias)/len(valores):.1%}",
+            ""
+        ])
         
         texto = "\n".join(lines)
         
-        # 5) Exportar para DOCX
+        # 4) Exportar para DOCX
         exportar_para_docx(texto, output_path)
-        print(f"✅ Relatório gerado: {output_path}")
+        print(f"✅ Relatório gerado com sucesso: {output_path}")
         
         return True, output_path
         
     except Exception as e:
-        print(f"❌ Erro ao gerar relatório: {str(e)}")
+        print(f"❌ Falha ao gerar relatório: {str(e)}")
         return False, str(e)
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
-        print("Uso: python validacao_parametros.py <arquivo.pdf> \"Nome Terapeuta\" \"Registro\"")
+        print("Uso correto: python analise_saude.py <arquivo.pdf> \"Nome Terapeuta\" \"Registro\"")
         sys.exit(1)
     
     sucesso, resultado = gerar_relatorio(sys.argv[1], sys.argv[2], sys.argv[3])
