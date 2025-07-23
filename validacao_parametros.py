@@ -4,7 +4,7 @@ from io import BytesIO
 from docx import Document
 
 def extrair_parametros_e_valores(caminho_pdf):
-    """Extrai os parâmetros (intervalos normais) e valores medidos do PDF"""
+    """Extrai os intervalos normais (3ª coluna) e valores medidos (4ª coluna) com tratamento robusto"""
     parametros = {}
     valores_medidos = {}
     
@@ -21,36 +21,34 @@ def extrair_parametros_e_valores(caminho_pdf):
             
             for tabela in tabelas:
                 for linha in tabela:
-                    # Verifica se a linha tem pelo menos 4 colunas e contém dados relevantes
-                    if len(linha) >= 4 and linha[1] and linha[2] and linha[3]:
-                        item_teste = linha[1].strip()
-                        intervalo_normal = linha[2].strip()
-                        valor_medido = linha[3].strip()
+                    # Verifica se temos colunas suficientes e dados relevantes
+                    if len(linha) >= 4 and linha[1].strip() and linha[2].strip() and linha[3].strip():
+                        item = linha[1].strip()
+                        intervalo = linha[2].strip()
+                        valor = linha[3].strip()
                         
-                        # Processa o intervalo normal (terceira coluna)
-                        if " - " in intervalo_normal:
+                        # Processa o intervalo normal (3ª coluna)
+                        intervalo = intervalo.replace("\n", " ").replace(",", ".").replace(" ", "")
+                        if " - " in intervalo:
                             try:
-                                # Remove possíveis quebras de linha e processa os valores
-                                intervalo_normal = intervalo_normal.replace("\n", "")
-                                minimo, maximo = map(float, intervalo_normal.split(" - "))
-                                
-                                # Processa o valor medido (quarta coluna)
-                                valor_medido = (valor_medido.replace(",", ".")
-                                                  .replace(" ", "")
-                                                  .replace("\n", "")
-                                                  .replace("'", ""))
-                                valor_medido = float(valor_medido)
-                                
-                                # Armazena os parâmetros e valores
-                                parametros[item_teste] = (minimo, maximo)
-                                valores_medidos[item_teste] = valor_medido
-                            except (ValueError, AttributeError):
+                                minimo, maximo = map(float, intervalo.split("-"))
+                            except ValueError:
                                 continue
+                            
+                            # Processa o valor medido (4ª coluna) - mantendo o tratamento original robusto
+                            valor = (valor.replace(",", ".")
+                                      .replace(" ", "")
+                                      .replace("\n", "")
+                                      .replace("'", ""))
+                            
+                            if valor.replace(".", "", 1).isdigit():
+                                parametros[item] = (minimo, maximo)
+                                valores_medidos[item] = float(valor)
     
     return parametros, valores_medidos
 
 def validar_valores(parametros, valores):
-    """Valida os valores medidos contra os parâmetros de referência"""
+    """Validação rigorosa usando os parâmetros extraídos"""
     anomalias = []
     
     for item, valor in valores.items():
@@ -81,7 +79,7 @@ def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomal
         # 1) Extrair parâmetros e valores
         parametros, valores = extrair_parametros_e_valores(pdf_path)
         if not parametros or not valores:
-            raise ValueError("Não foi possível extrair parâmetros e valores do PDF. Verifique o formato do arquivo.")
+            raise ValueError("Nenhum parâmetro ou valor foi extraído do PDF. Verifique o formato do arquivo.")
         
         # 2) Validar valores
         anomalias = validar_valores(parametros, valores)
@@ -90,6 +88,7 @@ def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomal
         lines = [
             "Relatório de Anomalias",
             f"Terapeuta: {terapeuta}   Registro: {registro}",
+            f"Total de parâmetros analisados: {len(parametros)}",
             ""
         ]
         
