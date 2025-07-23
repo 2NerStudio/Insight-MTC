@@ -5,43 +5,58 @@ from io import BytesIO
 from docx import Document
 
 def extrair_parametros_e_valores(caminho_pdf):
-    """Extrai tanto os parâmetros (nome + intervalo) quanto os valores medidos"""
+    """Extrai parâmetros e valores com estratégias robustas"""
     dados = {'parametros': {}, 'valores': {}}
     
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
-            # Configuração para tabelas com bordas visíveis
-            table_settings = {
-                "vertical_strategy": "lines",
-                "horizontal_strategy": "lines",
-                "intersection_y_tolerance": 10,
-                "explicit_vertical_lines": page.curves + page.edges,
-                "explicit_horizontal_lines": page.curves + page.edges
-            }
+            # Primeiro tentamos extrair texto cru para análise
+            texto = page.extract_text()
             
-            tabelas = page.extract_tables(table_settings)
+            # Padrão para encontrar linhas de resultados (ajuste conforme seu PDF)
+            padrao = re.compile(
+                r'(?P<nome>.+?)\s+'  # Nome do parâmetro
+                r'(?P<valor>\d+[\.,]\d+)\s+'  # Valor medido
+                r'(?P<unidade>\w*)\s*'  # Unidade (opcional)
+                r'(?P<intervalo>[\d\.,]+\s*[-–]\s*[\d\.,]+)'  # Intervalo de referência
+            )
             
-            for tabela in tabelas:
-                for linha in tabela:
-                    if len(linha) >= 4:
-                        # Extrai nome do parâmetro (2ª coluna)
-                        nome_parametro = linha[1].strip() if linha[1] else None
-                        
-                        # Extrai intervalo de referência (3ª coluna)
-                        if linha[2]:
-                            intervalo = linha[2].replace(",", ".").replace("\n", "").strip()
-                            # Procura por padrão "X.XXX - Y.YYY" ou "X.XXX-Y.YYY"
-                            match = re.search(r"(\d+\.?\d*)\s*[-–]\s*(\d+\.?\d*)", intervalo)
-                            if match and nome_parametro:
-                                minimo = float(match.group(1))
-                                maximo = float(match.group(2))
-                                dados['parametros'][nome_parametro] = (minimo, maximo)
-                        
-                        # Extrai valor medido (4ª coluna)
-                        if nome_parametro and linha[3]:
-                            valor = linha[3].replace(",", ".").strip()
-                            if valor.replace(".", "", 1).isdigit():
-                                dados['valores'][nome_parametro] = float(valor)
+            for match in padrao.finditer(texto):
+                nome = match.group('nome').strip()
+                valor = float(match.group('valor').replace(',', '.'))
+                intervalo = match.group('intervalo').replace(',', '.').replace(' ', '')
+                
+                # Processa intervalo
+                minimo, maximo = map(float, re.split(r'[-–]', intervalo))
+                
+                dados['parametros'][nome] = (minimo, maximo)
+                dados['valores'][nome] = valor
+            
+            # Se não encontrou no texto, tenta tabelas com estratégia mais flexível
+            if not dados['parametros']:
+                tabelas = page.extract_tables({
+                    "vertical_strategy": "text", 
+                    "horizontal_strategy": "text"
+                })
+                
+                for tabela in tabelas:
+                    for linha in tabela:
+                        if len(linha) >= 4:
+                            nome = (linha[1] or '').strip()
+                            intervalo = (linha[2] or '').replace(',', '.').replace('\n', '').strip()
+                            valor = (linha[3] or '').replace(',', '.').strip()
+                            
+                            if nome and intervalo and valor:
+                                # Processa intervalo
+                                match = re.search(r'(\d+\.?\d*)\s*[-–]\s*(\d+\.?\d*)', intervalo)
+                                if match:
+                                    minimo, maximo = map(float, match.groups())
+                                    try:
+                                        valor_float = float(valor)
+                                        dados['parametros'][nome] = (minimo, maximo)
+                                        dados['valores'][nome] = valor_float
+                                    except ValueError:
+                                        continue
     
     return dados
 
