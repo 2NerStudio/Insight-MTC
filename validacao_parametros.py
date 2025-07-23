@@ -1,204 +1,239 @@
+import sys
 import pdfplumber
-import re
+from io import BytesIO
 from docx import Document
-from typing import Dict, Tuple, List, Union
 
-def extract_patient_info(text: str) -> Dict[str, str]:
-    """Extracts patient information from the header"""
-    patient_info = {
-        'nome': 'N/A',
-        'sexo': 'N/A',
-        'idade': 'N/A',
-        'data_exame': 'N/A'
-    }
-    
-    # Extract name, gender and age
-    name_match = re.search(r"Nome:\s*(.+?)\s*\|Sexo:\s*(.+?)\s*\|Idade:\s*(\d+)", text)
-    if name_match:
-        patient_info.update({
-            'nome': name_match.group(1).strip(),
-            'sexo': name_match.group(2).strip(),
-            'idade': name_match.group(3).strip()
-        })
-    
-    # Extract exam date
-    date_match = re.search(r"Período do teste:\s*(\d{4}/\d{2}/\d{2}\s*\d{2}:\d{2})", text)
-    if date_match:
-        patient_info['data_exame'] = date_match.group(1).strip()
-    
-    return patient_info
+PARAMETROS = {
+"Viscosidade do sangue": (48.264, 65.371),
+"Cristal de colesterol": (56.749, 67.522),
+"Elasticidade vascular": (1.672, 1.978),
+"Elasticidade dos vasos sanguíneos do cérebro": (0.708, 1.942),
+"Situação do fornecimento de sangue ao tecido cerebral": (6.138, 21.396),
+"Coeficiente de secreção de pepsina": (59.847, 65.234),
+"Coeficiente das funções peristálticas gástricas": (58.425, 61.213),
+"Coeficiente das funções de absorção do intestino delgado": (3.572, 6.483),
+"Metabolismo de proteínas": (116.34, 220.62),
+"Função de produção de energia": (0.713, 0.992),
+"Teor de gordura do fígado": (0.097, 0.419 ),
+"Globulina do soro sanguíneo (A/G)": (126, 159),
+"Insulina": (2.845, 4.017),
+"Polipeptídeo pancreático (PP)": (3.210, 6.854),
+"Urobilinogênio": (2.762, 5.424),
+"Ácido úrico": (1.435, 1.987),
+"Atividade pulmonar VC": (3348, 3529),
+"Capacidade pulmonar total TLC": (4301, 4782),
+"Fornecimento de sangue ao cérebro": (143.37, 210.81),
+"Coeficiente de oestecelastos": (86.73, 180.97),
+"Calcificação coluna cervical": (421, 490),
+"Coeficiente de secreção de insulina": (2.967, 3.528),
+"Capacidade de reação física": (59.786, 65.424),
+"Falta de água": (33.967, 37.642),
+"Bebida estimulante": (0.209, 0.751),
+"Tabaco/nicotina e outros": (0.124, 0.453),
+"Cálcio": (1.219, 3.021),
+"Ferro": (1.151, 1.847),
+"Zinco": (1.143, 1.989),
+"Selênio": (0.847, 2.045),
+"Cobre": (0.474, 0.749),
+"Manganês": (0.497, 0.879),
+"Níquel": (2.462, 5.753),
+"Fidor": (1.954, 4.543),
+"Silício": (1.425, 5.872),
+"Estrogênio": (3.296, 8.840),
+"Gonadotrofina": (4.886, 8.931),
+"Prolactina": (3.142, 7.849),
+"Progesterona": (6.818, 16.743),
+"Coeficiente de cervicite": (2.845, 4.017),
+"Índice dos radicais livres da pele": (0.124, 3.453),
+"Índice de colágeno da pele": (4.471, 6.079),
+"Índice de oleosidade da pele": (14.477, 21.348),
+"Índice de imunidade da pele": (1.035, 3.230),
+"Índice de elasticidade da pele": (2.717, 3.512),
+"Índice de queratinócitos da pele": (0.842, 1.858),
+"Índice de secreção da tireóide": (2.954, 5.543),
+"Índice de secreção da paratireóide": (2.845, 4.017),
+"Índice de secreção da glândula supra-renal": (2.412, 2.974),
+"Índice de secreção da pituitária": (2.163, 7.340),
+"Índice de imunidade da mucosa": (4.111, 18.741),
+"Índice de linfonodo": (133.437, 140.470),
+"Índice de imunidade das amígdalas": (0.124, 0.453),
+"Índice do baço": (34.367, 35.642),
+"Coeficiente de fibrosidade da glândula mamária": (0.202, 0.991),
+"Coeficiente de mastite aguda": (0.713, 0.992),
+"Coeficiente de distúrbios endócrinos": (1.684, 4.472),
+"Vitamina A": (0.346, 0.401),
+"Vitamina B3": (14.477, 21.348),
+"Vitamina E": (4.826, 6.013),
+"Lisina": (0.253, 0.659),
+"Triptofano": (1.213, 3.709),
+"Treonina": (0.422, 0.817),
+"Valina": (2.012, 4.892),
+"Fosfatase alcalina óssea": (0.433, 0.796),
+"Osteocalcina": (0.525, 0.817),
+"Linha epifisária": (0.432, 0.826),
+"Bolsas sob os olhos": (0.510, 3.109),
+"Colágeno das rugas nos olhos": (2.031, 3.107),
+"Afrouxamento e queda": (0.233, 0.559),
+"Fadiga visual": (2.017, 5.157),
+"Chumbo": (0.052, 0.643),
+"Mercúrio": (0.013, 0.336),
+"Arsênico": (0.153, 0.621),
+"Alumínio": (0.192, 0.412),
+"Índice de alergia a medicamentos": (0.431, 1.329),
+"Fibra química": (0.842, 1.643),
+"Índice de alergia a poeira": (0.543, 1.023),
+"Alergia a corante de tintas cabelo": (0.717, 1.486),
+"Índice alergia de contato": (0.124, 1.192),
+"Nicotinamida": (2.074, 3.309),
+"Coenzima Q10": (0.831, 1.588),
+"Coeficiente de metabolismo anormal de lipidos": (1.992, 3.713),
+"Coeficiente de conteúdo anormal de triglicerídeos": (1.341, 1.991),
+"Colágeno - Olhos": (6.352, 8.325),
+"Circulação de sangue do coração e do cérebro": (3.586, 4.337),
+"Sistema imunologico": (3.376, 4.582),
+"Tecido muscular": (6.552, 8.268),
+"Metabolismo da gordura": (6.338, 8.368),
+"Esqueleto": (6.256, 8.682),
+"Hormona luteinizante(LH)": (0.679, 1.324),
+"Meridiano baco/pancreas tai yn do pe": (0.327, 0.937),
+"Meridiano da Bexiga Tai Yang do Pé": (4.832, 5.147),
+"Pericárdio": (1.338, 1.672),
+"Meridiano da Vesícula Billar Shao Yang do Pé": (1.554, 1.988),
+"Ren Mai": (11.719, 18.418),
+"Coeficiente da onda de pulso K": (0.316, 0.401),
+"Pressão do oxigênio do sangue cerebrovascular (PaO2)": (5.017, 5.597),
+"Lipoproteína de alta densidade (HDL-C)": (1.449, 2.246),
+"Complexo imunológico circulatório (CIC)": (13.012, 17.291),
+"Taxa de sedimentação": (6.326, 8.018),
+"Índice imunitário celular": (5.769, 7.643),
+"Índice de imunidade humoral": (6.424, 8.219),
+"Dor": (1.845, 3.241),
+"Medo": (2.155, 4.031),
+"Neutralidade": (2.471, 3.892),
+"Vontade": (2.216, 4.094),
+"Aceitação": (1.668, 4.053),
+"Razão": (1.352, 3.436),
+"Amor": (2.138, 3.754),
+"Volume inspiratório(TI)": (4.126, 6.045),
+"Capacidade residual funcional(FRC)": (5.147, 6.219),
+"Índice esfingolípide": (3.121, 3.853),
+"Índice de esfingomielilina": (3.341, 4.214),
+"Índice lipossômico": (3.112, 4.081),
+"Índice de ácidos gordos não saturados": (2.224, 3.153),
+"Índice de ácidos gordos essenciais": (2.144, 3.238)
+}
 
-def clean_text(text: str) -> str:
-    """Cleans and normalizes text for processing"""
-    text = re.sub(r'\n+', ' ', text)  # Replace multiple newlines with space
-    text = re.sub(r'\s+', ' ', text)  # Replace multiple spaces with single space
-    text = re.sub(r'-\s+', '', text)  # Join hyphenated words
-    return text.strip()
-
-def extract_exam_data(text: str) -> Dict[str, Dict[str, Union[Tuple[float, float], float, str]]]:
-    """Extracts exam parameters and values from the text"""
-    data = {'parametros': {}, 'valores': {}}
+def extrair_valores_do_pdf(caminho_pdf):
+    """Extrai os valores da 4ª coluna com tratamento robusto"""
+    valores = []
     
-    # Improved pattern to match exam items
-    pattern = re.compile(
-        r'(?P<sistema>.+?)\s*\n'  # System (may be on previous line)
-        r'(?P<item>.+?)\s+'       # Test item
-        r'(?P<intervalo>\d+[\.,]\d+\s*[-–]\s*\d+[\.,]\d+)\s+'  # Reference range
-        r'(?P<valor>\d+[\.,]\d+)\s*'  # Measured value
-        r'(?P<conselho>.*?)(?=\n\s*[A-ZÀ-Ú]|\Z)',  # Advice (until next item or end)
-        re.MULTILINE | re.DOTALL
-    )
-    
-    for match in pattern.finditer(text):
-        system = clean_text(match.group('sistema'))
-        item = clean_text(match.group('item'))
-        range_vals = match.group('intervalo').replace(',', '.').replace(' ', '')
-        value = match.group('valor').replace(',', '.')
-        advice = clean_text(match.group('conselho'))
-        
-        try:
-            min_val, max_val = map(float, re.split(r'[-–]', range_vals))
-            float_value = float(value)
+    with pdfplumber.open(caminho_pdf) as pdf:
+        for page in pdf.pages:
+            # Configuração otimizada para tabelas com bordas visíveis
+            table_settings = {
+                "vertical_strategy": "lines",
+                "horizontal_strategy": "lines",
+                "intersection_y_tolerance": 10
+            }
             
-            key = f"{system} | {item}"
-            data['parametros'][key] = (min_val, max_val, advice)
-            data['valores'][key] = float_value
+            tabelas = page.extract_tables(table_settings)
+            
+            for tabela in tabelas:
+                for linha in tabela:
+                    # Pega a 4ª coluna se existir
+                    if len(linha) >= 4:
+                        valor = linha[3].strip() if linha[3] else ""
+                        # Limpeza robusta do valor
+                        valor = (valor.replace(",", ".")
+                              .replace(" ", "")
+                              .replace("\n", "")
+                              .replace("'", ""))
+                        
+                        if valor and valor.replace(".", "", 1).isdigit():
+                            valores.append(float(valor))
+    
+    # Garante que pegamos exatamente a quantidade necessária
+    return dict(zip(PARAMETROS.keys(), valores[:len(PARAMETROS)]))
+
+def validar_valores(valores):
+    """Validação rigorosa mantendo a lógica original"""
+    anomalias = []
+    
+    for item, valor in valores.items():
+        if item not in PARAMETROS:
+            continue
+            
+        try:
+            minimo, maximo = PARAMETROS[item]
+            valor = float(valor)
+            
+            if not (minimo <= valor <= maximo):
+                status = "Abaixo" if valor < minimo else "Acima"
+                anomalias.append({
+                    "item": item,
+                    "valor_real": valor,
+                    "status": status,
+                    "normal_min": minimo,
+                    "normal_max": maximo
+                })
         except (ValueError, TypeError):
             continue
     
-    return data
+    return anomalias
 
-def analyze_results(data: Dict) -> Dict:
-    """Analyzes results and identifies anomalies"""
-    anomalies = []
-    normal = []
-    
-    for key, value in data['valores'].items():
-        if key in data['parametros']:
-            min_val, max_val, advice = data['parametros'][key]
-            
-            status = "DENTRO"
-            if value < min_val:
-                status = "ABAIXO"
-            elif value > max_val:
-                status = "ACIMA"
-            
-            result = {
-                'parametro': key,
-                'valor': value,
-                'intervalo': f"{min_val:.3f} - {max_val:.3f}",
-                'status': status,
-                'conselho': advice if status != "DENTRO" else ""
-            }
-            
-            if status != "DENTRO":
-                anomalies.append(result)
-            else:
-                normal.append(result)
-    
-    return {
-        'anomalias': anomalies,
-        'normais': normal,
-        'total_parametros': len(data['valores']),
-        'total_anomalias': len(anomalies)
-    }
-
-def create_report(data: Dict, analysis: Dict, output_path: str = "Relatorio_Exames.docx") -> str:
-    """Creates a comprehensive report in Word format"""
+def exportar_para_docx(texto, output_path):
+    """
+    Cria um .docx com o texto dado e salva em output_path.
+    """
     doc = Document()
-    
-    # Header
-    doc.add_heading('RELATÓRIO DE ANÁLISE DE EXAMES', level=1)
-    
-    # Patient information
-    patient = data.get('paciente', {})
-    doc.add_paragraph(f"Paciente: {patient.get('nome', 'N/A')}")
-    doc.add_paragraph(f"Sexo: {patient.get('sexo', 'N/A')} | Idade: {patient.get('idade', 'N/A')}")
-    doc.add_paragraph(f"Data do Exame: {patient.get('data_exame', 'N/A')}")
-    doc.add_paragraph("\n")
-    
-    # Summary
-    doc.add_heading('RESUMO', level=2)
-    doc.add_paragraph(f"Total de Parâmetros Analisados: {analysis['total_parametros']}")
-    doc.add_paragraph(f"Anomalias Detectadas: {analysis['total_anomalias']}")
-    doc.add_paragraph(f"Percentual de Anomalias: {analysis['total_anomalias']/analysis['total_parametros']:.1%}")
-    doc.add_paragraph("\n")
-    
-    # Anomalies table
-    if analysis['anomalias']:
-        doc.add_heading('PARÂMETROS COM ANOMALIAS', level=2)
-        table = doc.add_table(rows=1, cols=5)
-        table.style = 'Table Grid'
-        
-        # Header
-        hdr_cells = table.rows[0].cells
-        hdr_cells[0].text = 'Parâmetro'
-        hdr_cells[1].text = 'Valor'
-        hdr_cells[2].text = 'Intervalo Normal'
-        hdr_cells[3].text = 'Status'
-        hdr_cells[4].text = 'Recomendações'
-        
-        # Add rows
-        for item in analysis['anomalias']:
-            row_cells = table.add_row().cells
-            row_cells[0].text = item['parametro']
-            row_cells[1].text = f"{item['valor']:.3f}"
-            row_cells[2].text = item['intervalo']
-            row_cells[3].text = item['status']
-            row_cells[4].text = item['conselho']
-    
-    doc.add_paragraph("\n")
-    
-    # Normal results summary
-    if analysis['normais']:
-        doc.add_heading('PARÂMETROS NORMAIS', level=2)
-        doc.add_paragraph(f"Total de parâmetros dentro da normalidade: {len(analysis['normais'])}")
-    
-    # Footer
-    doc.add_paragraph("\n\n")
-    doc.add_paragraph("Este relatório foi gerado automaticamente com base nos dados extraídos do exame.")
-    doc.add_paragraph("Os resultados devem ser interpretados por um profissional de saúde qualificado.")
-    
+    for line in texto.split("\n"):
+        doc.add_paragraph(line)
     doc.save(output_path)
-    return output_path
 
-def process_pdf_report(pdf_path: str) -> str:
-    """Main function to process the PDF and generate report"""
+def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
     try:
-        # Extract data from PDF
-        with pdfplumber.open(pdf_path) as pdf:
-            full_text = "\n".join([page.extract_text() for page in pdf.pages])
+        # 1) Extrair valores
+        valores = extrair_valores_do_pdf(pdf_path)
+        if not valores:
+            raise ValueError("Nenhum valor foi extraído do PDF. Verifique o formato do arquivo.")
         
-        patient_data = extract_patient_info(full_text)
-        exam_data = extract_exam_data(full_text)
+        # 2) Validar valores
+        anomalias = validar_valores(valores)
         
-        if not exam_data['valores']:
-            raise ValueError("Não foi possível extrair dados dos exames do PDF.")
+        # 3) Montar texto do relatório
+        lines = [
+            "Relatório de Anomalias",
+            f"Terapeuta: {terapeuta}   Registro: {registro}",
+            ""
+        ]
         
-        exam_data['paciente'] = patient_data
-        analysis = analyze_results(exam_data)
+        if not anomalias:
+            lines.append("🎉 Todos os parâmetros dentro da normalidade.")
+        else:
+            lines.append(f"⚠️ {len(anomalias)} anomalias encontradas:")
+            for a in anomalias:
+                lines.append(
+                    f"• {a['item']}: {a['valor_real']:.3f}  "
+                    f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
+                )
         
-        # Generate report filename based on patient name
-        report_name = f"Relatorio_{patient_data['nome'].replace(' ', '_')}.docx"
-        report_path = create_report(exam_data, analysis, report_name)
+        texto = "\n".join(lines)
         
-        print(f"Relatório gerado com sucesso: {report_path}")
-        return report_path
-    
+        # 4) Exportar para DOCX
+        exportar_para_docx(texto, output_path)
+        print(f"✅ Relatório gerado: {output_path}")
+        
+        return True, output_path
+        
     except Exception as e:
-        print(f"Erro ao processar o relatório: {str(e)}")
-        raise
+        print(f"❌ Erro ao gerar relatório: {str(e)}")
+        return False, str(e)
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) != 2:
-        print("Uso: python analisador_exames.py <caminho_do_pdf>")
+    if len(sys.argv) != 4:
+        print("Uso: python validacao_parametros.py <arquivo.pdf> \"Nome Terapeuta\" \"Registro\"")
         sys.exit(1)
     
-    pdf_file = sys.argv[1]
-    try:
-        report_file = process_pdf_report(pdf_file)
-        print(f"Relatório salvo como: {report_file}")
-    except Exception as e:
-        print(f"Falha ao gerar relatório: {e}")
+    sucesso, resultado = gerar_relatorio(sys.argv[1], sys.argv[2], sys.argv[3])
+    if not sucesso:
         sys.exit(1)
