@@ -3,7 +3,7 @@ import tempfile
 import os
 import subprocess
 
-from validacao_parametros import extrair_valores_do_pdf, validar_valores, gerar_relatorio
+from validacao_parametros import extrair_parametros_e_valores, validar_valores, gerar_relatorio
 
 # ========================================
 # LOGIN SIMPLES
@@ -75,31 +75,42 @@ if st.button("⚙️ Validar Parâmetros"):
             else:
                 pdf_path = tmp_input.name
 
-            # 3) Extrai e valida
-            valores = extrair_valores_do_pdf(pdf_path)
-            anomalias = validar_valores(valores)
+            # 3) Extrai parâmetros e valores, depois valida
+            try:
+                parametros, valores = extrair_parametros_e_valores(pdf_path)
+                if not parametros or not valores:
+                    st.error("❌ Não foi possível extrair parâmetros do arquivo. Verifique o formato.")
+                    st.stop()
+                
+                anomalias = validar_valores(parametros, valores)
 
-        # Exibe resultado
-        if not anomalias:
-            st.success("🎉 Todos os parâmetros estão dentro do intervalo normal.")
-        else:
-            st.error(f"⚠️ {len(anomalias)} anomalias encontradas:")
-            for a in anomalias:
-                st.markdown(
-                    f"- **{a['item']}**: {a['valor_real']}  "
-                    f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
-                )
+                # Exibe resultado
+                if not anomalias:
+                    st.success("🎉 Todos os parâmetros estão dentro do intervalo normal.")
+                else:
+                    st.error(f"⚠️ {len(anomalias)} anomalias encontradas:")
+                    for a in anomalias:
+                        st.markdown(
+                            f"- **{a['item']}**: {a['valor_real']:.3f}  "
+                            f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
+                        )
 
-            # 4) Gera e oferece download do .docx final
-            output_path = os.path.join(tempfile.gettempdir(), "relatorio_anomalias.docx")
-            gerar_relatorio(pdf_path, nome_terapeuta, registro_terapeuta, output_path)
-            with open(output_path, "rb") as f:
-                st.download_button(
-                    "⬇️ Baixar relatório de anomalias (.docx)",
-                    data=f.read(),
-                    file_name="relatorio_anomalias.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
+                    # 4) Gera e oferece download do .docx final
+                    output_path = os.path.join(tempfile.gettempdir(), "relatorio_anomalias.docx")
+                    sucesso, _ = gerar_relatorio(pdf_path, nome_terapeuta, registro_terapeuta, output_path)
+                    if sucesso:
+                        with open(output_path, "rb") as f:
+                            st.download_button(
+                                "⬇️ Baixar relatório de anomalias (.docx)",
+                                data=f.read(),
+                                file_name="relatorio_anomalias.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            )
+                    else:
+                        st.warning("Não foi possível gerar o relatório completo.")
+
+            except Exception as e:
+                st.error(f"❌ Erro ao processar o arquivo: {str(e)}")
 
         # 5) Limpeza
         os.unlink(tmp_input.name)
