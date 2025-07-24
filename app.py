@@ -3,7 +3,12 @@ import tempfile
 import os
 import subprocess
 
-from validacao_parametros import extrair_valores_do_pdf, validar_valores, gerar_relatorio
+from validacao_parametros import (
+    extrair_parametros_do_pdf,
+    extrair_valores_do_pdf,
+    validar_valores,
+    gerar_relatorio
+)
 
 # ========================================
 # LOGIN SIMPLES
@@ -40,10 +45,9 @@ if st.sidebar.button("Sair"):
     st.experimental_rerun()
 
 st.title("🌿 MTC Insight Pro")
-st.caption("Suporta PDF e DOCX (via LibreOffice) e valida parâmetros")
+st.caption("Suporta PDF e DOCX (via LibreOffice) e valida parâmetros dinamicamente")
 
-# Terapeuta
-st.subheader("🧑‍⚕️ Informações do Terapeuta")
+# Terapeuta\st.subheader("🧑‍⚕️ Informações do Terapeuta")
 nome_terapeuta = st.text_input("Nome completo do terapeuta")
 registro_terapeuta = st.text_input("CRF / CRTH / Registro profissional")
 
@@ -64,7 +68,7 @@ if st.button("⚙️ Validar Parâmetros"):
             tmp_input.write(arquivo.read())
             tmp_input.close()
 
-            # 2) Se for DOCX, converte para PDF com LibreOffice
+            # 2) Converte DOCX em PDF, se necessário
             if ext == ".docx":
                 tmp_pdf = tmp_input.name.replace(".docx", ".pdf")
                 subprocess.run([
@@ -75,11 +79,12 @@ if st.button("⚙️ Validar Parâmetros"):
             else:
                 pdf_path = tmp_input.name
 
-            # 3) Extrai e valida
-            valores = extrair_valores_do_pdf(pdf_path)
-            anomalias = validar_valores(valores)
+            # 3) Extrai parâmetros e valores
+            parametros = extrair_parametros_do_pdf(pdf_path)
+            valores = extrair_valores_do_pdf(pdf_path, list(parametros.keys()))
+            anomalias = validar_valores(valores, parametros)
 
-        # Exibe resultado
+        # 4) Mostra resultados
         if not anomalias:
             st.success("🎉 Todos os parâmetros estão dentro do intervalo normal.")
         else:
@@ -90,7 +95,7 @@ if st.button("⚙️ Validar Parâmetros"):
                     f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
                 )
 
-            # 4) Gera e oferece download do .docx final
+            # 5) Gera e oferece download do relatório
             output_path = os.path.join(tempfile.gettempdir(), "relatorio_anomalias.docx")
             gerar_relatorio(pdf_path, nome_terapeuta, registro_terapeuta, output_path)
             with open(output_path, "rb") as f:
@@ -101,7 +106,7 @@ if st.button("⚙️ Validar Parâmetros"):
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
 
-        # 5) Limpeza
+        # 6) Limpeza de arquivos temporários
         os.unlink(tmp_input.name)
         if ext == ".docx" and os.path.exists(pdf_path):
             os.unlink(pdf_path)
