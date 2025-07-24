@@ -1,38 +1,70 @@
 import sys
 import pdfplumber
 from docx import Document
+from io import BytesIO
 import re
 
-# Função unificada para extrair parâmetros e valores via regex de texto
+# Função para extrair parâmetros e valores a partir de tabelas do PDF
 
 def extrair_parametros_e_valores(caminho_pdf):
     """
-    Extrai de cada linha: Nome do teste, intervalo (min-max) e valor medido.
-    Retorna dois dicionários:
-      parametros: {item: (min, max)}
-      valores: {item: valor}
+    Extrai de cada tabela do PDF:
+      - item (coluna 2)
+      - intervalo normal (coluna 3, ex: 'min - max')
+      - valor medido (coluna 4)
+    Retorna:
+      parametros: dict[item] = (min, max)
+      valores: dict[item] = valor
     """
     parametros = {}
     valores = {}
-    pattern = re.compile(r"^\s*(?P<item>.+?)\s+(?P<min>[0-9]+(?:[\.,][0-9]+)?)\s*[–-]\s*(?P<max>[0-9]+(?:[\.,][0-9]+)?)\s+(?P<val>[0-9]+(?:[\.,][0-9]+)?)\s*$")
+
+    table_settings = {
+        "vertical_strategy": "lines",
+        "horizontal_strategy": "lines",
+        "intersection_y_tolerance": 5
+    }
 
     with pdfplumber.open(caminho_pdf) as pdf:
         for page in pdf.pages:
-            text = page.extract_text()
-            if not text:
-                continue
-            for line in text.splitlines():
-                m = pattern.match(line)
-                if m:
-                    item = m.group('item').strip()
-                    mn = float(m.group('min').replace(',', '.'))
-                    mx = float(m.group('max').replace(',', '.'))
-                    val = float(m.group('val').replace(',', '.'))
-                    parametros[item] = (mn, mx)
-                    valores[item] = val
+            tabelas = page.extract_tables(table_settings)
+            for tabela in tabelas:
+                for linha in tabela:
+                    # validar colunas: precisa ter ao menos 4
+                    if not linha or len(linha) < 4:
+                        continue
+                    item = linha[1].strip() if linha[1] else None
+                    intervalo = linha[2].strip() if linha[2] else None
+                    valor_raw = linha[3].strip() if linha[3] else None
+                    if not item or not intervalo or not valor_raw:
+                        continue
+                    # limpar strings
+                    intervalo_clean = intervalo.replace(' ', '').replace(',', '.')
+                    # suporta tanto '-' quanto '–'
+                    parts = re.split(r"[–-]", intervalo_clean)
+                    if len(parts) != 2:
+                        continue
+                    try:
+                        minimo = float(parts[0])
+                        maximo = float(parts[1])
+                    except ValueError:
+                        continue
+                    # valor
+                    val_clean = valor_raw.replace(' ', '').replace(',', '.')
+                    # extrair numero no inicio da string
+                    m = re.match(r"^([0-9]+(?:\.[0-9]+)?)", val_clean)
+                    if not m:
+                        continue
+                    try:
+                        valor = float(m.group(1))
+                    except ValueError:
+                        continue
+                    # atribuir
+                    parametros[item] = (minimo, maximo)
+                    valores[item] = valor
     return parametros, valores
 
-# Validação permanece igual
+# Validação de valores usando dicionários extraídos
 
 def validar_valores(valores, parametros):
     anomalias = []
@@ -40,18 +72,22 @@ def validar_valores(valores, parametros):
         if item not in parametros:
             continue
         minimo, maximo = parametros[item]
-        if not (minimo <= valor <= maximo):
-            status = "Abaixo" if valor < minimo else "Acima"
+        try:
+            v = float(valor)
+        except (ValueError, TypeError):
+            continue
+        if v < minimo or v > maximo:
+            status = "Abaixo" if v < minimo else "Acima"
             anomalias.append({
                 "item": item,
-                "valor_real": valor,
+                "valor_real": v,
                 "status": status,
                 "normal_min": minimo,
                 "normal_max": maximo
             })
     return anomalias
 
-# Exportação para DOCX
+# Exportar relatório para DOCX
 
 def exportar_para_docx(texto, output_path):
     doc = Document()
@@ -59,13 +95,13 @@ def exportar_para_docx(texto, output_path):
         doc.add_paragraph(line)
     doc.save(output_path)
 
-# Gera relatório usando extração unificada
+# Geração de relatório
 
 def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
     try:
         parametros, valores = extrair_parametros_e_valores(pdf_path)
         if not parametros:
-            raise ValueError("Nenhum parâmetro foi extraído. Verifique o formato do PDF.")
+            raise ValueError("Nenhum parâmetro extraído. Verifique o formato do PDF.")
         anomalias = validar_valores(valores, parametros)
 
         lines = [
