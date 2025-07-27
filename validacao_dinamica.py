@@ -1,179 +1,150 @@
 import re
-import sys
 import pdfplumber
 from docx import Document
+import sys
 
-
-# ────────────────────────────────
-# utilidades
-# ────────────────────────────────
+# ╭──────────────────────── util ────────────────────────╮
 def _clean(txt: str) -> str:
-    """
-    Remove quebras de linha, normaliza vírgula/ponto
-    e apaga aspas estranhas.
-    """
     if not txt:
         return ""
     return (
-        txt.replace("\n", " ")
-        .replace("\r", " ")
-        .replace(",", ".")
-        .replace("’", "")
-        .replace("'", "")
-        .strip()
+        txt.replace("\n", " ").replace("\r", " ")
+        .replace(",", ".").replace("’", "").replace("'", "").strip()
     )
 
+def _list_numeros(txt: str):
+    return re.findall(r"[-+]?\d+(?:[.,]\d+)?", txt or "")
 
-def _str_to_float(num_str: str):
+def _num(txt: str):
     try:
-        return float(num_str.replace(",", "."))
+        return float(txt.replace(",", "."))
     except Exception:
         return None
+# ╰──────────────────────────────────────────────────────╯
 
 
-def _tem_dois_numeros(faixa: str):
-    return len(re.findall(r"[-+]?\d+(?:[.,]\d+)?", faixa)) >= 2
-
-
-def _pega_dois_numeros(faixa: str):
-    nums = re.findall(r"[-+]?\d+(?:[.,]\d+)?", faixa)
-    return _str_to_float(nums[0]), _str_to_float(nums[1])
-
-
-def _eh_numero(valor: str):
-    return bool(re.fullmatch(r"[-+]?\d+(?:[.,]\d+)?", valor))
-
-
-# ────────────────────────────────
-# 1) EXTRAÇÃO DINÂMICA
-# ────────────────────────────────
 def extrair_parametros_valores(pdf_path: str) -> dict:
     """
-    Retorna:
-        {
-            "Viscosidade do sangue": {
-                "min": 48.264, "max": 65.371, "valor": 70.494
-            },
-            ...
-        }
-    Agora suporta nomes quebrados em 2-3 linhas.
-    """
-    resultado = {}
-    nome_em_andamento = []  # partes acumuladas do nome
+    Extrai parâmetros onde:
+      • Nome          → 2ª coluna  (pode vir quebrado em várias linhas)
+      • Faixa normal  → 3ª coluna  (precisa conter pelo menos 2 números)
+      • Valor medido  → 4ª coluna  (precisa conter 1 número)
 
-    table_settings = {
-        "vertical_strategy": "lines",
-        "horizontal_strategy": "lines",
-        "intersection_y_tolerance": 10,
-    }
+    Estrutura retornada:
+        {"Viscosidade do sangue":
+              {"min":48.264, "max":65.371, "valor":70.494}, ...}
+    """
+    result = {}
+    ult_param = None         # mantém a chave do último parâmetro fechado
+    ult_foi_numerico = False # True se a linha anterior tinha faixa/valor
+
+    settings = dict(
+        vertical_strategy="lines",
+        horizontal_strategy="lines",
+        intersection_y_tolerance=10,
+    )
 
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            for tabela in page.extract_tables(table_settings):
-                for linha in tabela:
-                    if len(linha) < 4:
-                        continue  # linha muito curta
+            for tbl in page.extract_tables(settings):
+                for row in tbl:
+                    if len(row) < 4:
+                        continue
 
-                    # limpeza
-                    nome_cell = _clean(linha[1])
-                    faixa_cell = _clean(linha[2])
-                    valor_cell = _clean(linha[3])
+                    nome  = _clean(row[1])
+                    faixa = _clean(row[2])
+                    valor = _clean(row[3])
 
-                    # Acumula a parte do nome (sempre existe algo na col. 2)
-                    if nome_cell:
-                        nome_em_andamento.append(nome_cell)
+                    tem_numeros_faixa = len(_list_numeros(faixa)) >= 2
+                    tem_valor         = len(_list_numeros(valor)) == 1
 
-                    # Verifico se ESTA linha já tem faixa e valor válidos
-                    cond_faixa_ok = _tem_dois_numeros(faixa_cell)
-                    cond_valor_ok = _eh_numero(valor_cell)
+                    # ── Caso 1: linha SÓ de continuação do nome?
+                    if nome and not tem_numeros_faixa and not tem_valor:
+                        if ult_param and ult_foi_numerico:
+                            # anexamos ao nome do último parâmetro
+                            novo_nome = (ult_param + " " + nome).strip()
+                            result[novo_nome] = result.pop(ult_param)
+                            ult_param = novo_nome
+                        else:
+                            # provavelmente é o início de um novo parâmetro,
+                            # mas ainda sem números → aguardamos as próximas linhas
+                            ult_param = nome      # inicia pré-param.
+                        ult_foi_numerico = False
+                        continue
 
-                    if cond_faixa_ok and cond_valor_ok:
-                        # Fechamos um parâmetro completo
-                        nome_completo = " ".join(nome_em_andamento).strip()
-                        nome_em_andamento = []  # zera para o próximo
+                    # ── Caso 2: linha que traz faixa + valor  → fecha parâmetro
+                    if nome and tem_numeros_faixa and tem_valor:
+                        minimo, maximo = map(_num, _list_numeros(faixa)[:2])
+                        valor_num      = _num(_list_numeros(valor)[0])
 
-                        minimo, maximo = _pega_dois_numeros(faixa_cell)
-                        valor = _str_to_float(valor_cell)
+                        result[nome] = {"min": minimo, "max": maximo, "valor": valor_num}
+                        ult_param = nome
+                        ult_foi_numerico = True
+                        continue
 
-                        if nome_completo and minimo is not None and maximo is not None:
-                            resultado[nome_completo] = {
-                                "min": minimo,
-                                "max": maximo,
-                                "valor": valor,
-                            }
+                    # ── Qualquer outra combinação é irrelevante
+                    ult_foi_numerico = False
 
-                # Segurança: se terminar a página com nome pendente, força reset
-                if nome_em_andamento and len(nome_em_andamento) > 5:
-                    nome_em_andamento = []
-
-    return resultado
+    return result
 
 
-# ────────────────────────────────
-# 2) VALIDAÇÃO
-# ────────────────────────────────
 def validar_parametros(dados: dict):
-    anomalias = []
-    for item, info in dados.items():
-        v, mn, mx = info["valor"], info["min"], info["max"]
-        if v is None:
+    anom = []
+    for item, d in dados.items():
+        v, mn, mx = d["valor"], d["min"], d["max"]
+        if v is None or mn is None or mx is None:
             continue
         if not (mn <= v <= mx):
-            status = "Abaixo" if v < mn else "Acima"
-            anomalias.append(
-                {
-                    "item": item,
-                    "valor_real": v,
-                    "status": status,
-                    "normal_min": mn,
-                    "normal_max": mx,
-                }
+            anom.append(
+                dict(
+                    item=item,
+                    valor_real=v,
+                    status="Abaixo" if v < mn else "Acima",
+                    normal_min=mn,
+                    normal_max=mx,
+                )
             )
-    return anomalias
+    return anom
 
 
-# ────────────────────────────────
-# 3) DOCX
-# ────────────────────────────────
-def _para_docx(texto, output_path):
+def _to_docx(texto: str, path: str):
     doc = Document()
-    for l in texto.split("\n"):
-        doc.add_paragraph(l)
-    doc.save(output_path)
+    for linha in texto.split("\n"):
+        doc.add_paragraph(linha)
+    doc.save(path)
 
 
 def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
     try:
         dados = extrair_parametros_valores(pdf_path)
         if not dados:
-            raise ValueError("Não foi possível extrair parâmetros.")
+            raise ValueError("Não foi possível extrair parâmetros do PDF.")
 
-        anomalias = validar_parametros(dados)
+        anom = validar_parametros(dados)
 
         linhas = [
             "Relatório de Anomalias",
             f"Terapeuta: {terapeuta}   Registro: {registro}",
             "",
         ]
-        if not anomalias:
+        if not anom:
             linhas.append("🎉 Todos os parâmetros dentro da normalidade.")
         else:
-            linhas.append(f"⚠️ {len(anomalias)} anomalias encontradas:")
-            for a in anomalias:
+            linhas.append(f"⚠️ {len(anom)} anomalias encontradas:")
+            for a in anom:
                 linhas.append(
                     f"• {a['item']}: {a['valor_real']:.3f} "
                     f"({a['status']} do normal; "
                     f"Normal: {a['normal_min']}–{a['normal_max']})"
                 )
 
-        _para_docx("\n".join(linhas), output_path)
+        _to_docx("\n".join(linhas), output_path)
         return True, output_path
-
     except Exception as e:
         return False, str(e)
 
 
-# CLI opcional
+# CLI (opcional)
 if __name__ == "__main__":
     if len(sys.argv) != 4:
         print("Uso: python validacao_dinamica.py <arquivo.pdf> \"Terapeuta\" \"Registro\"")
