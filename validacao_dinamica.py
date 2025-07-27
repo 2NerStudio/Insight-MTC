@@ -44,10 +44,10 @@ def _explode_nome(raw_nome: str):
 
 def extrair_parametros_valores(pdf_path: str) -> dict:
     """
-    Versão 5 – robusta para:
-        • Quebra antes + depois
-        • Linha-núcleo com números em QUALQUER coluna
-        • Vários parâmetros colados na mesma célula
+    Versão 6 – junta:
+        • todos os pedaços antes da linha-núcleo;
+        • só os pedaços depois CUJO primeiro carácter NÃO é maiúsculo.
+    Assim evitamos ‘grudar’ o nome do próximo parâmetro.
     """
     resultado = {}
     cfg = dict(
@@ -56,55 +56,56 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
         intersection_y_tolerance=10,
     )
 
-    # 1) Carrega todas as linhas da(s) tabela(s)
+    # ── carrega todas as linhas
     linhas = []
     with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            for tbl in page.extract_tables(cfg):
-                for row in tbl:
-                    if len(row) < 4:
+        for pg in pdf.pages:
+            for tb in pg.extract_tables(cfg):
+                for r in tb:
+                    if len(r) < 4:
                         continue
-                    col2, col3, col4 = map(_clean, row[1:4])
-                    linha_txt = " ".join([col2, col3, col4])
-                    nums = _row_numbers(linha_txt)
+                    c2, c3, c4 = map(_clean, r[1:4])
                     linhas.append(
-                        dict(nome=col2, faixa=col3, valor=col4, nums=nums)
+                        dict(
+                            nome=c2,
+                            faixa=c3,
+                            valor=c4,
+                            nums=_row_numbers(" ".join([c2, c3, c4])),
+                        )
                     )
 
-    # 2) Percorre com índice, acumulando partes de nome
-    buffer = []
+    buffer = []  # partes antes
     i = 0
     while i < len(linhas):
         ln = linhas[i]
 
-        if len(ln["nums"]) < 3:
-            # ainda não chegou a uma linha com 3 números ⇒ só acumula nome
+        if len(ln["nums"]) < 3:          # ainda não é linha-núcleo
             if ln["nome"]:
                 buffer.append(ln["nome"])
             i += 1
             continue
 
-        # Linha-núcleo: tem pelo menos 3 números
+        # ── linha-núcleo (tem min, max, valor)
         min_, max_, val = ln["nums"][:3]
+        base = " ".join(buffer + [ln["nome"]]).strip()
+        buffer = []                      # limpa para o próximo parâmetro
 
-        # Nome completo = buffer antes + nome desta linha
-        nome_base = " ".join(buffer + [ln["nome"]]).strip()
-        buffer = []  # limpa
-
-        # Também pegar pedaços DEPOIS desta linha até nova linha-núcleo
-        j = i + 1
-        pos_pieces = []
+        # pega pedaços DEPOIS que comecem por minúscula / '('
+        j, pos = i + 1, []
         while j < len(linhas) and len(linhas[j]["nums"]) < 3:
-            if linhas[j]["nome"]:
-                pos_pieces.append(linhas[j]["nome"])
-            j += 1
-        nome_todo = " ".join([nome_base] + pos_pieces).strip()
+            nm = linhas[j]["nome"]
+            if nm and (nm[0].islower() or nm[0] == "("):
+                pos.append(nm)
+                j += 1
+            else:
+                break                    # maiúscula ⇒ novo parâmetro
+        nome_final = " ".join([base] + pos).strip()
 
-        # Divide caso contenha vários parâmetros colados
-        for nome in _explode_nome(nome_todo):
-            resultado[nome] = {"min": min_, "max": max_, "valor": val}
+        # explode se houver vários parâmetros na MESMA célula
+        for n in _explode_nome(nome_final):
+            resultado[n] = {"min": min_, "max": max_, "valor": val}
 
-        i = j  # avança
+        i = j                            # continua dali
 
     return resultado
 
