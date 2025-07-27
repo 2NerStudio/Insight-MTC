@@ -11,7 +11,7 @@ def _clean(txt: str) -> str:
         re.sub(r'\s+', ' ', txt)  # Normaliza espaços
         .replace("\n", " ").replace("\r", " ")
         .replace(",", ".").replace("’", "").replace("'", "")
-        .replace("–", "-").replace("--", "-").replace(")", "")  # Remove ) isolados
+        .replace("–", "-").replace("--", "-").replace(")", "").replace("do)", "do")
         .strip()
     )
 
@@ -26,13 +26,11 @@ def _num(txt: str):
 # ╰──────────────────────────────────────────────────────╯
 
 def _is_param_row(col3: str, col4: str) -> bool:
-    """Linha-parâmetro = 3ª coluna (mín-máx) tem ≥2 números E 4ª coluna tem 1 número."""
     return len(_list_numeros(col3)) >= 2 and len(_list_numeros(col4)) == 1
 
 def _explode_nome(raw_nome: str):
     """
-    Divide nomes colados de forma inteligente: por separadores, depois por padrões de título (maiúsculas).
-    Filtra ruídos e agrupa continuações em minúsculas.
+    Divide nomes colados de forma inteligente, com agrupamento de compostos e filtro de fragmentos.
     """
     raw_nome = _clean(raw_nome)
     if not raw_nome:
@@ -44,38 +42,52 @@ def _explode_nome(raw_nome: str):
         if raw_nome.startswith(h):
             raw_nome = raw_nome[len(h):].strip()
 
-    # Divisão primária por separadores
+    # Divisão primária por separadores fortes
     partes = re.split(r':|KATEX_INLINE_CLOSE\s|\s{2,}|α-', raw_nome)
     partes = [p.strip(" -") for p in partes if p.strip()]
 
-    # Divisão secundária por padrões de título (sequências começando com maiúscula)
-    upper_pattern = r'[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ][a-záàâãéèêíóôõúç0-9\sKATEX_INLINE_OPENKATEX_INLINE_CLOSE/-]*?(?=[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ]|$)'
+    # Divisão secundária por padrões de título (sequências com maiúsculas internas permitidas)
+    upper_pattern = r'[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ][a-záàâãéèêíóôõúç0-9\sKATEX_INLINE_OPENKATEX_INLINE_CLOSE/-]*?(?=\s[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ][A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ]|\Z)'
     exploded = []
     for p in partes:
         subs = re.findall(upper_pattern, p)
         exploded.extend([sub.strip() for sub in subs if sub.strip()])
 
-    # Agrupa continuações em minúsculas ao item anterior
+    # Agrupamento avançado: junta preposições, minúsculas e fragmentos curtos
     final = []
     for part in exploded:
-        if part and part[0].islower() and final:
-            final[-1] += " " + part  # Anexa ao anterior
+        if not final:
+            final.append(part)
+            continue
+        last = final[-1]
+        if (
+            part.lower() in {'da', 'do', 'de', 'e', 'e'}  # Preposições
+            or part[0].islower()  # Continuações minúsculas
+            or (len(part) < 10 and last.endswith(' ') or last.endswith('-'))  # Fragmentos curtos
+            or ('Vitamina' in last and part.startswith('B') or part.startswith('K'))  # Vitaminas específicas
+        ):
+            final[-1] = f"{last} {part}"  # Junta ao anterior
         else:
             final.append(part)
 
-    # Filtro de duplicatas, ruídos e itens curtos
+    # Filtro de duplicatas, ruídos, incompletos (terminam com 'e' ou ':') e itens curtos
     ignore = {
-        'ITEM', 'DE', 'TESTE', 'Sistema', 'Meridiano', 'Meridiano do', 'do', 
-        'da', 'e', 'Afrouxamento e', 'Saturação do oxigênio do', 'Pressão do', 
-        'oxigênio do sangue cerebrovascular'  # Adicione mais baseados em padrões
+        'ITEM', 'DE', 'TESTE', 'Sistema', 'Meridiano', 'Meridiano do', 'Meridiano da', 'do', 'da', 'e',
+        'Afrouxamento e', 'Saturação do oxigênio do', 'Pressão do', 'oxigênio do sangue cerebrovascular',
+        'Vitamina', 'Índice de', 'Desintoxicação e', 'Shao', 'Tai', 'Yin da mão', 'Yang do', 'Yang da',
+        'Triplo', 'Aquecedor', 'Vital', 'queda'  # Adicione mais se necessário
     }
-    final = [p for i, p in enumerate(final) if p and len(p) >= 4 and p not in ignore and p not in final[:i]]
+    final = [
+        p for i, p in enumerate(final)
+        if p and len(p) >= 4 and p not in ignore and p not in final[:i]
+        and not p.endswith('e') and not p.endswith(':') and not p.endswith(' e')
+    ]
 
     return final
 
 def extrair_parametros_valores(pdf_path: str) -> dict:
     """
-    Versão 10 – otimizada para filtrar cabeçalhos e dividir nomes colados de forma inteligente.
+    Versão 11 – refinada para agrupamento inteligente de nomes compostos e filtro aprimorado.
     """
     resultado = {}
 
@@ -99,13 +111,13 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
     # ── percorre com índice i
     i = 0
     buffer_antes = []  # pedaços que vêm antes da 1ª linha-parâmetro
-    headers_ignore = {"ITEM", "DE", "TESTE", "ITEM DE TESTE"}  # Ignora cabeçalhos ao acumular
+    headers_ignore = {"ITEM", "DE", "TESTE", "ITEM DE TESTE"}
     while i < len(linhas):
         nome, faixa, valor = linhas[i]
 
-        # Se ainda não é linha-parâmetro, acumula no buffer SE NÃO for cabeçalho
+        # Se ainda não é linha-parâmetro, acumula no buffer SE NÃO for cabeçalho ou ignorável
         if not _is_param_row(faixa, valor):
-            if nome and not any(h in nome for h in headers_ignore):
+            if nome and not any(h in nome for h in headers_ignore) and nome not in headers_ignore:
                 buffer_antes.append(nome.strip())
             i += 1
             continue
@@ -118,7 +130,7 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
         minimo, maximo = map(_num, numeros_faixa[:2])
         valor_medido = _num(_list_numeros(valor)[0]) if _list_numeros(valor) else None
 
-        # Nome começa com buffer + próprio nome (se não for cabeçalho)
+        # Nome começa com buffer + próprio nome (se válido)
         partes_nome = buffer_antes + ([nome.strip()] if nome and not any(h in nome for h in headers_ignore) else [])
         buffer_antes = []  # zera
 
@@ -130,10 +142,16 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
                 partes_nome.append(nm_next.strip())
             j += 1
 
-        nome_completo = " ".join(partes_nome)
+        nome_completo = " ".join(partes_nome).strip()
+
+        # Se o nome completo for ignorável ou vazio, pula
+        if not nome_completo or all(part in headers_ignore for part in nome_completo.split()):
+            i = j
+            continue
 
         # Divide e associa valores
-        for n in _explode_nome(nome_completo):
+        nomes_divididos = _explode_nome(nome_completo)
+        for n in nomes_divididos:
             resultado[n] = {"min": minimo, "max": maximo, "valor": valor_medido}
 
         i = j
