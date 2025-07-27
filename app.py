@@ -11,7 +11,7 @@ from validacao_dinamica import (
 )
 
 # ========================================
-# LOGIN SIMPLES
+# LOGIN SIMPLES (para produção, use st.secrets ou banco de dados com hashing)
 # ========================================
 usuarios_autorizados = {
     "yan": "1234",
@@ -63,62 +63,71 @@ if st.button("⚙️ Validar Parâmetros"):
         st.warning("⚠️ Envie um arquivo PDF ou DOCX.")
     else:
         with st.spinner("🔍 Processando..."):
-            # 1) Salva upload em arquivo temporário
-            ext = os.path.splitext(arquivo.name)[1].lower()
-            tmp_input = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-            tmp_input.write(arquivo.read())
-            tmp_input.close()
+            tmp_input = None
+            pdf_path = None
+            try:
+                # 1) Salva upload em arquivo temporário
+                ext = os.path.splitext(arquivo.name)[1].lower()
+                tmp_input = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                tmp_input.write(arquivo.read())
+                tmp_input.close()
 
-            # 2) Se for DOCX, converte para PDF com LibreOffice
-            if ext == ".docx":
-                tmp_pdf = tmp_input.name.replace(".docx", ".pdf")
-                subprocess.run(
-                    [
-                        "libreoffice",
-                        "--headless",
-                        "--convert-to",
-                        "pdf",
-                        tmp_input.name,
-                        "--outdir",
-                        os.path.dirname(tmp_input.name),
-                    ],
-                    check=True,
-                )
-                pdf_path = tmp_pdf
-            else:
-                pdf_path = tmp_input.name
+                # 2) Se for DOCX, converte para PDF com LibreOffice
+                if ext == ".docx":
+                    tmp_pdf = tmp_input.name.replace(".docx", ".pdf")
+                    subprocess.run(
+                        [
+                            "libreoffice",
+                            "--headless",
+                            "--convert-to",
+                            "pdf",
+                            tmp_input.name,
+                            "--outdir",
+                            os.path.dirname(tmp_input.name),
+                        ],
+                        check=True,
+                    )
+                    pdf_path = tmp_pdf
+                    if not os.path.exists(pdf_path):
+                        raise FileNotFoundError("Falha na conversão de DOCX para PDF.")
+                else:
+                    pdf_path = tmp_input.name
 
-            # 3) Extrai e valida — agora com a nova API
-            dados = extrair_parametros_valores(pdf_path)
-            anomalias = validar_parametros(dados)
+                # 3) Extrai e valida — agora com a nova API
+                dados = extrair_parametros_valores(pdf_path)
+                anomalias = validar_parametros(dados)
 
-        # 4) Exibe resultado
-        if not anomalias:
-            st.success("🎉 Todos os parâmetros estão dentro do intervalo normal.")
-        else:
-            st.error(f"⚠️ {len(anomalias)} anomalias encontradas:")
-            for a in anomalias:
-                st.markdown(
-                    f"- **{a['item']}**: {a['valor_real']}  "
-                    f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
-                )
+                # 4) Exibe resultado
+                if not anomalias:
+                    st.success("🎉 Todos os parâmetros estão dentro do intervalo normal.")
+                else:
+                    st.error(f"⚠️ {len(anomalias)} anomalias encontradas:")
+                    for a in anomalias:
+                        st.markdown(
+                            f"- **{a['item']}**: {a['valor_real']}  "
+                            f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
+                        )
 
-            # 5) Gera e oferece download do .docx final
-            output_path = os.path.join(
-                tempfile.gettempdir(), "relatorio_anomalias.docx"
-            )
-            gerar_relatorio(
-                pdf_path, nome_terapeuta, registro_terapeuta, output_path
-            )
-            with open(output_path, "rb") as f:
-                st.download_button(
-                    "⬇️ Baixar relatório de anomalias (.docx)",
-                    data=f.read(),
-                    file_name="relatorio_anomalias.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                )
+                    # 5) Gera e oferece download do .docx final
+                    output_path = os.path.join(
+                        tempfile.gettempdir(), "relatorio_anomalias.docx"
+                    )
+                    gerar_relatorio(
+                        pdf_path, nome_terapeuta, registro_terapeuta, output_path
+                    )
+                    with open(output_path, "rb") as f:
+                        st.download_button(
+                            "⬇️ Baixar relatório de anomalias (.docx)",
+                            data=f.read(),
+                            file_name="relatorio_anomalias.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        )
 
-        # 6) Limpeza
-        os.unlink(tmp_input.name)
-        if ext == ".docx" and os.path.exists(pdf_path):
-            os.unlink(pdf_path)
+            except Exception as e:
+                st.error(f"❌ Erro ao processar o arquivo: {str(e)}")
+            finally:
+                # 6) Limpeza
+                if tmp_input and os.path.exists(tmp_input.name):
+                    os.unlink(tmp_input.name)
+                if pdf_path and os.path.exists(pdf_path) and pdf_path != tmp_input.name:
+                    os.unlink(pdf_path)
