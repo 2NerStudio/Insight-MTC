@@ -35,9 +35,10 @@ def extrair_parametros_valores(pdf_path):
 
                         # Detecta sistema: linhas sem números, com palavras chave
                         if not re.search(r'\d', row_text) and re.search(r'(Função|Índice|Coeficiente|Sistema|Meridiano|Pulso|Cardiovascular)', row_text):
-                            if item_acumulado:
-                                # Salva item anterior
-                                dados.append(_criar_dado(sistema_atual, item_acumulado, conselhos_acumulado))
+                            if item_acumulado and conselhos_acumulado:  # Só salva se houver acumulado válido
+                                dado = _criar_dado(sistema_atual, item_acumulado, conselhos_acumulado)
+                                if dado['normal_min'] is not None and dado['valor_real'] is not None:
+                                    dados.append(dado)
                             sistema_atual = row_text
                             item_acumulado = ""
                             conselhos_acumulado = ""
@@ -55,19 +56,34 @@ def extrair_parametros_valores(pdf_path):
                         match = re.match(r'(.*?)\s*(\d+[.,]?\d*)\s*-\s*(\d+[.,]?\d*)\s*(\d+[.,]?\d*)\s*(.*)', row_text.replace(',', '.'))
                         if match:
                             novo_item = match.group(1).strip()
-                            normal_min = float(match.group(2))
-                            normal_max = float(match.group(3))
-                            valor_real = float(match.group(4))
+                            try:
+                                normal_min = float(match.group(2))
+                                normal_max = float(match.group(3))
+                                valor_real = float(match.group(4))
+                            except ValueError:
+                                logging.warning(f"Row ignorada: valores inválidos em {row_text}")
+                                continue
+
                             novo_conselhos = match.group(5).strip()
 
-                            # Se for continuação, acumula
+                            # Salva acumulado anterior se existir
                             if item_acumulado:
-                                dados.append(_criar_dado(sistema_atual, item_acumulado, conselhos_acumulado, normal_min, normal_max, valor_real))
+                                dado = _criar_dado(sistema_atual, item_acumulado, conselhos_acumulado)
+                                if dado['normal_min'] is not None and dado['valor_real'] is not None:
+                                    dados.append(dado)
+
                             item_acumulado = novo_item
                             conselhos_acumulado = novo_conselhos
+                            # Salva imediatamente o novo (já que tem valores)
+                            dado = _criar_dado(sistema_atual, item_acumulado, conselhos_acumulado, normal_min, normal_max, valor_real)
+                            if dado['normal_min'] is not None and dado['valor_real'] is not None:
+                                dados.append(dado)
+                            item_acumulado = ""  # Reseta após salvar
+                            conselhos_acumulado = ""
                         else:
                             # Acumula em conselhos se não match
                             conselhos_acumulado += " " + row_text
+                            logging.info(f"Acumulado em conselhos: {row_text}")
 
                 # Fallback: texto plano se não houver tabelas
                 if not tables:
@@ -79,18 +95,25 @@ def extrair_parametros_valores(pdf_path):
                             match = re.match(r'(.*?)\s*(\d+\.?\d*)\s*-\s*(\d+\.?\d*)\s*(\d+\.?\d*)\s*(.*)', linha)
                             if match:
                                 item = match.group(1).strip()
-                                normal_min = float(match.group(2))
-                                normal_max = float(match.group(3))
-                                valor_real = float(match.group(4))
+                                try:
+                                    normal_min = float(match.group(2))
+                                    normal_max = float(match.group(3))
+                                    valor_real = float(match.group(4))
+                                except ValueError:
+                                    continue
                                 conselhos = match.group(5).strip()
-                                dados.append(_criar_dado(sistema_atual, item, conselhos, normal_min, normal_max, valor_real))
+                                dado = _criar_dado(sistema_atual, item, conselhos, normal_min, normal_max, valor_real)
+                                if dado['normal_min'] is not None and dado['valor_real'] is not None:
+                                    dados.append(dado)
 
-        # Salva o último acumulado
+        # Salva o último acumulado, se válido
         if item_acumulado:
-            dados.append(_criar_dado(sistema_atual, item_acumulado, conselhos_acumulado))
+            dado = _criar_dado(sistema_atual, item_acumulado, conselhos_acumulado)
+            if dado['normal_min'] is not None and dado['valor_real'] is not None:
+                dados.append(dado)
 
         # Limpa dados inválidos
-        dados = [d for d in dados if d['item'] and d['normal_min'] is not None]
+        dados = [d for d in dados if d['normal_min'] is not None and d['valor_real'] is not None]
 
         if not dados:
             raise ValueError("Nenhum dado parseado. Verifique o PDF.")
@@ -103,7 +126,7 @@ def extrair_parametros_valores(pdf_path):
         raise
 
 def _criar_dado(sistema, item, conselhos, min_val=None, max_val=None, valor=None):
-    if min_val > max_val:
+    if min_val is not None and max_val is not None and min_val > max_val:
         min_val, max_val = max_val, min_val
     return {
         'sistema': sistema or 'Desconhecido',
@@ -114,7 +137,7 @@ def _criar_dado(sistema, item, conselhos, min_val=None, max_val=None, valor=None
         'conselhos': conselhos
     }
 
-# validar_parametros e gerar_relatorio (atualizados para incluir sistema no item para contexto)
+# validar_parametros e gerar_relatorio permanecem iguais ao código anterior
 def validar_parametros(dados):
     anomalias = []
     for d in dados:
