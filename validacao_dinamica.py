@@ -1,211 +1,138 @@
 import re
-import pdfplumber
+import logging
+from PyPDF2 import PdfReader
 from docx import Document
-import sys
+from docx.shared import Pt
 
-# ╭──────────────────────── util ────────────────────────╮
-def _clean(txt: str) -> str:
-    if not txt:
-        return ""
-    txt = re.sub(r'\s+', ' ', txt).strip()
-    return txt.replace("\n", " ").replace("\r", " ").replace(",", ".").replace("’", "").replace("'", "").replace("–", "-").replace("--", "-").replace("()", "")
+logging.basicConfig(level=logging.INFO)
 
-def _list_numeros(txt: str):
-    return re.findall(r"[-+]?\d+(?:[.,]\d+)?", txt or "")
-
-def _num(txt: str):
+def extrair_parametros_valores(pdf_path):
+    """
+    Extrai texto do PDF e parseia para obter sistemas, itens, intervalos normais, valores reais e conselhos.
+    Retorna lista de dicts: [{'sistema': str, 'item': str, 'normal_min': float, 'normal_max': float, 'valor_real': float, 'conselhos': str}]
+    """
     try:
-        return float(txt.replace(",", "."))
-    except Exception:
-        return None
-# ╰──────────────────────────────────────────────────────╯
+        reader = PdfReader(pdf_path)
+        texto_completo = ""
+        for page in reader.pages:
+            texto_completo += page.extract_text() + "\n"
 
-def _is_param_row(col3: str, col4: str) -> bool:
-    return len(_list_numeros(col3)) >= 2 and len(_list_numeros(col4)) == 1
-
-# Regex compiladas para performance (sênior: cache e eficiência)
-SPLIT_PATTERN = re.compile(r':|KATEX_INLINE_CLOSE\s{1,}|\s{2,}|α-')
-UPPER_PATTERN = re.compile(r'[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ][a-záàâãéèêíóôõúç0-9\sKATEX_INLINE_OPENKATEX_INLINE_CLOSE/-]*?(?=\s[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ][^a-záàâãéèêíóôõúç]|\Z)')
-
-def _explode_nome(raw_nome: str):
-    raw_nome = _clean(raw_nome)
-    if not raw_nome:
-        return []
-
-    headers = ["ITEM DE TESTE", "ITEM", "DE", "TESTE"]
-    for h in headers:
-        if raw_nome.startswith(h):
-            raw_nome = raw_nome[len(h):].strip()
-
-    partes = [p.strip(" -") for p in SPLIT_PATTERN.split(raw_nome) if p.strip()]
-
-    exploded = []
-    for p in partes:
-        subs = UPPER_PATTERN.findall(p + ' ')
-        exploded.extend([sub.strip() for sub in subs if sub.strip()])
-
-    final = []
-    for part in exploded:
-        if not final:
-            final.append(part)
-            continue
-        last = final[-1]
-        if (
-            part.lower() in {'da', 'do', 'de', 'e'}
-            or part[0].islower()
-            or (len(part) < 10 and (last.endswith(' ') or last.endswith('-') or last.endswith('(')))
-            or (last.endswith('(') and part.endswith(')'))
-            or ('Vitamina' in last and (part.startswith('B') or part.startswith('K')))
-            or last.endswith('do') or last.endswith('da')
-        ):
-            final[-1] = f"{last} {part}".strip()
-        else:
-            final.append(part)
-
-    ignore = {  # (lista inalterada, mas como set para lookup O(1))
-        'ITEM', 'DE', 'TESTE', 'Sistema', 'Meridiano', 'Meridiano do', 'Meridiano da', 'do', 'da', 'e',
-        'Afrouxamento e', 'Saturação do oxigênio do', 'Pressão do', 'oxigênio do sangue cerebrovascular',
-        'Vitamina', 'Índice de', 'Desintoxicação e', 'Shao', 'Tai', 'Yin da mão', 'Yang do', 'Yang da',
-        'Triplo', 'Aquecedor', 'Vital', 'queda', 'BA', 'V', 'Sa', 'Yang do Pé Triplo',
-        'Índice do baço Tiroglobulina', 'Grau de hiperplasia óssea Linha epifisária',
-        'Urobilinogênio Nitrogênio uréico Atividade pulmonar'
-    }
-    final = list(set(p for p in final if p and len(p) >= 5 and p not in ignore and not p.endswith(('e', ':', 'do', 'da', 'de', ' e'))))
-
-    return final
-
-def extrair_parametros_valores(pdf_path: str) -> dict:
-    resultado = {}
-    cfg = dict(vertical_strategy="lines", horizontal_strategy="lines", intersection_y_tolerance=10)
-
-    linhas = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for pg in pdf.pages:
-            for tb in pg.extract_tables(cfg):
-                for row in tb:
-                    if len(row) < 4:
-                        continue
-                    c2, c3, c4 = map(_clean, row[1:4])
-                    linhas.append((c2, c3, c4))
-
-    if not linhas:
-        raise ValueError("Nenhuma linha de tabela encontrada no PDF.")
-
-    buffer_antes = []
-    headers_ignore = {"ITEM", "DE", "TESTE", "ITEM DE TESTE"}
-    max_iterations = len(linhas) * 2
-    iteration_count = 0
-
-    # Reescrito como for para evitar infinitos (avança i sempre)
-    i = 0
-    while i < len(linhas):  # Mantive while, mas com incremento garantido abaixo
-        iteration_count += 1
-        if iteration_count > max_iterations:
-            print("LOG ERROR: Loop excedeu limite – PDF malformado.")
-            raise RuntimeError("Loop infinito detectado – PDF malformado.")
-
-        nome, faixa, valor = linhas[i]
-
-        if not _is_param_row(faixa, valor):
-            if nome and len(nome) >= 5 and not any(h in nome for h in headers_ignore) and nome not in headers_ignore:
-                buffer_antes.append(nome.strip())
-            i += 1  # Incremento garantido
-            continue
-
-        numeros_faixa = _list_numeros(faixa)
-        if len(numeros_faixa) < 2:
-            i += 1  # Incremento garantido
-            continue
-        minimo, maximo = map(_num, numeros_faixa[:2])
-        valor_medido = _num(_list_numeros(valor)[0]) if _list_numeros(valor) else None
-
-        partes_nome = buffer_antes + ([nome.strip()] if nome and len(nome) >= 5 and not any(h in nome for h in headers_ignore) else [])
-        buffer_antes = []
-
-        j = i + 1
-        sub_iteration = 0
-        while j < len(linhas) and not _is_param_row(linhas[j][1], linhas[j][2]) and sub_iteration < 1000:  # Limite sub-loop
-            sub_iteration += 1
-            nm_next = linhas[j][0]
-            if nm_next and len(nm_next) >= 5 and not any(h in nm_next for h in headers_ignore):
-                partes_nome.append(nm_next.strip())
-            j += 1
-
-        nome_completo = " ".join(partes_nome).strip()
-
-        if not nome_completo or all(part in headers_ignore for part in nome_completo.split()):
-            i = j  # Avança para j
-            continue
-
-        print(f"LOG: Processando nome: {nome_completo}")  # Logging para rastrear
-
-        nomes_divididos = _explode_nome(nome_completo)
-        for n in nomes_divididos:
-            key = (n, valor_medido)
-            if key not in resultado:
-                resultado[key] = {"min": minimo, "max": maximo, "valor": valor_medido}
-
-        i = j  # Avança para j sempre
-
-    return {k[0]: v for k, v in resultado.items()}
-
-# (Restante do código inalterado: validar_parametros, _to_docx, gerar_relatorio, CLI)
-def validar_parametros(dados: dict):
-    anom = []
-    for item, d in dados.items():
-        v, mn, mx = d["valor"], d["min"], d["max"]
-        if v is None or mn is None or mx is None:
-            continue
-        if not (mn <= v <= mx):
-            anom.append(
-                dict(
-                    item=item,
-                    valor_real=v,
-                    status="Abaixo" if v < mn else "Acima",
-                    normal_min=mn,
-                    normal_max=mx,
-                )
-            )
-    return anom
-
-def _to_docx(texto: str, path: str):
-    doc = Document()
-    for linha in texto.split("\n"):
-        doc.add_paragraph(linha)
-    doc.save(path)
-
-def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
-    try:
-        dados = extrair_parametros_valores(pdf_path)
+        # Normaliza texto: remove quebras extras, substitui vírgulas por pontos para floats
+        texto_completo = re.sub(r'\s+', ' ', texto_completo).replace(',', '.')
+        
+        dados = []
+        sistema_atual = None
+        linhas = texto_completo.splitlines()
+        
+        for linha in linhas:
+            linha = linha.strip()
+            if not linha:
+                continue
+            
+            # Detecta sistema (cabeçalhos como "Cardiovascular e Cerebrovascular")
+            if re.match(r'^[A-Z][a-z]+\s', linha) and 'Função' in linha or 'Índice' in linha or 'Coeficiente' in linha:
+                sistema_atual = linha
+                continue
+            
+            # Padrão para item: "Item intervalo_min - intervalo_max valor_real Conselhos..."
+            match = re.match(r'(.+?)\s+(\d+\.?\d*)\s*-\s*(\d+\.?\d*)\s+(\d+\.?\d*)\s+(.*)', linha)
+            if match:
+                item = match.group(1).strip()
+                normal_min = float(match.group(2))
+                normal_max = float(match.group(3))
+                valor_real = float(match.group(4))
+                conselhos = match.group(5).strip()
+                
+                # Corrige se min > max (inverte)
+                if normal_min > normal_max:
+                    normal_min, normal_max = normal_max, normal_min
+                
+                dados.append({
+                    'sistema': sistema_atual,
+                    'item': item,
+                    'normal_min': normal_min,
+                    'normal_max': normal_max,
+                    'valor_real': valor_real,
+                    'conselhos': conselhos
+                })
+        
         if not dados:
-            raise ValueError("Não foi possível extrair parâmetros do PDF.")
-
-        anom = validar_parametros(dados)
-
-        linhas = [
-            "Relatório de Anomalias",
-            f"Terapeuta: {terapeuta}   Registro: {registro}",
-            "",
-        ]
-        if not anom:
-            linhas.append("🎉 Todos os parâmetros dentro da normalidade.")
-        else:
-            linhas.append(f"⚠️ {len(anom)} anomalias encontradas:")
-            for a in anom:
-                linhas.append(
-                    f"• {a['item']}: {a['valor_real']:.3f} "
-                    f"({a['status']} do normal; "
-                    f"Normal: {a['normal_min']}–{a['normal_max']})"
-                )
-
-        _to_docx("\n".join(linhas), output_path)
-        return True, output_path
+            raise ValueError("Nenhum dado parseado do PDF. Verifique o formato.")
+        
+        logging.info(f"Extraídos {len(dados)} itens do PDF.")
+        return dados
+    
     except Exception as e:
-        return False, str(e)
+        logging.error(f"Erro na extração: {str(e)}")
+        raise
 
-if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        print("Uso: python validacao_dinamica.py <arquivo.pdf> \"Terapeuta\" \"Registro\"")
-        sys.exit(1)
-    ok, _ = gerar_relatorio(sys.argv[1], sys.argv[2], sys.argv[3])
-    sys.exit(0 if ok else 1)
+def validar_parametros(dados):
+    """
+    Valida cada item comparando valor_real com [normal_min, normal_max].
+    Retorna lista de anomalias: [{'item': str, 'valor_real': float, 'status': 'abaixo'/'acima', 'normal_min': float, 'normal_max': float, 'conselhos': str}]
+    """
+    anomalias = []
+    for d in dados:
+        if not isinstance(d['valor_real'], (int, float)) or not isinstance(d['normal_min'], (int, float)) or not isinstance(d['normal_max'], (int, float)):
+            continue  # Ignora inválidos
+        
+        if d['valor_real'] < d['normal_min']:
+            status = 'abaixo'
+        elif d['valor_real'] > d['normal_max']:
+            status = 'acima'
+        else:
+            continue
+        
+        anomalias.append({
+            'item': d['item'],
+            'valor_real': d['valor_real'],
+            'status': status,
+            'normal_min': d['normal_min'],
+            'normal_max': d['normal_max'],
+            'conselhos': d['conselhos']
+        })
+    
+    logging.info(f"Encontradas {len(anomalias)} anomalias.")
+    return anomalias
+
+def gerar_relatorio(pdf_path, nome_terapeuta, registro_terapeuta, output_path):
+    """
+    Gera um DOCX com relatório de anomalias e dados completos.
+    """
+    try:
+        dados = extrair_parametros_valores(pdf_path)  # Re-extrai para consistência
+        anomalias = validar_parametros(dados)
+        
+        doc = Document()
+        doc.add_heading('Relatório de Anomalias - MTC Insight', 0)
+        
+        # Cabeçalho terapeuta
+        p = doc.add_paragraph()
+        p.add_run(f"Terapeuta: {nome_terapeuta}\nRegistro: {registro_terapeuta}\n").bold = True
+        
+        # Seção de Anomalias
+        doc.add_heading('Anomalias Detectadas', level=1)
+        if not anomalias:
+            doc.add_paragraph('Nenhuma anomalia encontrada. Todos os parâmetros estão normais.')
+        else:
+            for a in anomalias:
+                doc.add_paragraph(
+                    f"- {a['item']}: {a['valor_real']} ({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})\n"
+                    f"  Conselhos: {a['conselhos']}",
+                    style='List Bullet'
+                )
+        
+        # Seção de Dados Completos (para referência)
+        doc.add_heading('Dados Extraídos Completos', level=1)
+        for d in dados:
+            doc.add_paragraph(
+                f"Sistema: {d['sistema']}\nItem: {d['item']}\nNormal: {d['normal_min']}–{d['normal_max']}\nValor Real: {d['valor_real']}\nConselhos: {d['conselhos']}\n",
+                style='Normal'
+            )
+        
+        doc.save(output_path)
+        logging.info(f"Relatório gerado em {output_path}")
+    
+    except Exception as e:
+        logging.error(f"Erro na geração do relatório: {str(e)}")
+        raise
