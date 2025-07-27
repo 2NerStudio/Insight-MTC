@@ -1,174 +1,179 @@
 import re
 import logging
-from PyPDF2 import PdfReader
+import pdfplumber
 from docx import Document
-from docx.shared import Pt
 
 logging.basicConfig(level=logging.INFO)
 
 def extrair_parametros_valores(pdf_path):
     """
-    Extrai texto do PDF e parseia para obter sistemas, itens, intervalos normais, valores reais e conselhos.
+    Extrai tabelas do PDF usando pdfplumber e parseia para obter sistemas, itens, intervalos normais, valores reais e conselhos.
     Retorna lista de dicts: [{'sistema': str, 'item': str, 'normal_min': float, 'normal_max': float, 'valor_real': float, 'conselhos': str}]
     """
+    dados = []
+    sistema_atual = None
+
     try:
-        reader = PdfReader(pdf_path)
-        texto_completo = ""
-        for page in reader.pages:
-            texto_completo += page.extract_text() + "\n"
+        with pdfplumber.open(pdf_path) as pdf:
+            for page in pdf.pages:
+                # Extrai tabelas da página
+                tables = page.extract_tables()
+                for table in tables:
+                    for row in table:
+                        # Ignora linhas vazias ou cabeçalhos
+                        row = [cell.strip() if cell else "" for cell in row]
+                        if not any(row):
+                            continue
 
-        # Normaliza texto: remove quebras extras, substitui vírgulas por pontos para floats
-        texto_completo = re.sub(r'\s+', ' ', texto_completo).replace(',', '.')
-        logging.info(f"Texto extraído (primeiros 500 chars): {texto_completo[:500]}")  # Para depuração
+                        # Detecta sistema: linhas com 1-2 células, sem números, parecendo cabeçalhos
+                        if len(row) <= 2 and not re.search(r'\d', row[0][:20]) and re.search(r'(Função|Índice|Coeficiente|Sistema|Meridiano|Pulso)', row[0]):
+                            sistema_atual = row[0]
+                            continue
 
-        dados = []
-        sistema_atual = None
-        item_atual = None
-        conselhos_acumulados = ""
-        linhas = texto_completo.splitlines()
+                        # Assume estrutura de 5 colunas: SISTEMA (opcional), ITEM, INTERVALO, VALOR, CONSELHOS
+                        # Mas como pode variar, usa posições flexíveis
+                        if len(row) >= 4:
+                            item = row[1] if len(row) > 1 else ""
+                            intervalo = row[2] if len(row) > 2 else ""
+                            valor_str = row[3] if len(row) > 3 else ""
+                            conselhos = " ".join(row[4:]) if len(row) > 4 else ""
 
-        for linha in linhas:
-            linha = linha.strip()
-            if not linha:
-                continue
+                            # Parseia intervalo: "min - max"
+                            match_intervalo = re.match(r'(\d+[.,]?\d*)\s*-\s*(\d+[.,]?\d*)', intervalo.replace(',', '.'))
+                            if not match_intervalo:
+                                continue
+                            normal_min = float(match_intervalo.group(1))
+                            normal_max = float(match_intervalo.group(2))
 
-            # Detecta sistema (linhas que parecem cabeçalhos, ex: "Cardiovascular e Cerebrovascular" ou "Função do Fígado")
-            if re.search(r'(Função|Índice|Coeficiente|Sistema|Meridiano|Pulso)', linha) and not re.search(r'\d', linha[:20]):
-                if sistema_atual and item_atual and conselhos_acumulados:
-                    # Salva item anterior antes de mudar sistema
-                    dados.append({
-                        'sistema': sistema_atual,
-                        'item': item_atual,
-                        'normal_min': normal_min,
-                        'normal_max': normal_max,
-                        'valor_real': valor_real,
-                        'conselhos': conselhos_acumulados.strip()
-                    })
-                sistema_atual = linha
-                item_atual = None
-                conselhos_acumulados = ""
-                continue
+                            # Parseia valor real
+                            valor_str = valor_str.replace(',', '.')
+                            match_valor = re.match(r'\d+[.]?\d*', valor_str)
+                            if not match_valor:
+                                continue
+                            valor_real = float(match_valor.group(0))
 
-            # Detecta item: padrão como "Item min - max valor" seguido de conselhos
-            match = re.match(r'(.+?)\s*(\d+\.?\d*)\s*-\s*(\d+\.?\d*)\s*(\d+\.?\d*)\s*(.*)', linha)
-            if match:
-                if item_atual and conselhos_acumulados:
-                    # Salva item anterior
-                    dados.append({
-                        'sistema': sistema_atual,
-                        'item': item_atual,
-                        'normal_min': normal_min,
-                        'normal_max': normal_max,
-                        'valor_real': valor_real,
-                        'conselhos': conselhos_acumulados.strip()
-                    })
+                            # Corrige min > max
+                            if normal_min > normal_max:
+                                normal_min, normal_max = normal_max, normal_min
 
-                item_atual = match.group(1).strip()
-                normal_min = float(match.group(2))
-                normal_max = float(match.group(3))
-                valor_real = float(match.group(4))
-                conselhos_acumulados = match.group(5).strip()
+                            dados.append({
+                                'sistema': sistema_atual or 'Desconhecido',
+                                'item': item,
+                                'normal_min': normal_min,
+                                'normal_max': normal_max,
+                                'valor_real': valor_real,
+                                'conselhos': conselhos
+                            })
 
-                # Corrige se min > max
-                if normal_min > normal_max:
-                    normal_min, normal_max = normal_max, normal_min
-                continue
-
-            # Acumula conselhos para linhas subsequentes
-            if item_atual:
-                conselhos_acumulados += " " + linha
-
-        # Salva o último item
-        if sistema_atual and item_atual and conselhos_acumulados:
-            dados.append({
-                'sistema': sistema_atual,
-                'item': item_atual,
-                'normal_min': normal_min,
-                'normal_max': normal_max,
-                'valor_real': valor_real,
-                'conselhos': conselhos_acumulados.strip()
-            })
+                # Fallback: se não houver tabelas, tenta extrair texto plano
+                if not tables:
+                    texto = page.extract_text()
+                    if texto:
+                        # Usa parsing de texto plano similar ao anterior (para robustez)
+                        linhas = texto.splitlines()
+                        for linha in linhas:
+                            linha = linha.strip().replace(',', '.')
+                            match = re.match(r'(.+?)\s*(\d+\.?\d*)\s*-\s*(\d+\.?\d*)\s*(\d+\.?\d*)\s*(.*)', linha)
+                            if match:
+                                item = match.group(1)
+                                normal_min = float(match.group(2))
+                                normal_max = float(match.group(3))
+                                valor_real = float(match.group(4))
+                                conselhos = match.group(5)
+                                if normal_min > normal_max:
+                                    normal_min, normal_max = normal_max, normal_min
+                                dados.append({
+                                    'sistema': sistema_atual or 'Desconhecido',
+                                    'item': item,
+                                    'normal_min': normal_min,
+                                    'normal_max': normal_max,
+                                    'valor_real': valor_real,
+                                    'conselhos': conselhos
+                                })
 
         if not dados:
-            raise ValueError("Nenhum dado parseado do PDF. Verifique se o texto é extraível e o formato da tabela. Tente depurar o texto extraído.")
+            raise ValueError("Nenhum dado parseado do PDF. Pode ser um PDF baseado em imagens ou formato não suportado. Tente depurar o texto extraído ou adicione OCR.")
 
         logging.info(f"Extraídos {len(dados)} itens do PDF.")
         return dados
-    
+
     except Exception as e:
         logging.error(f"Erro na extração: {str(e)}")
         raise
 
-# As funções validar_parametros e gerar_relatorio permanecem iguais ao código anterior
-# (copie-as do meu response anterior para completar o arquivo, ou mantenha se já estiverem lá)
-
+# Funções validar_parametros e gerar_relatorio (iguais ao anterior, com pequenos ajustes para robustez)
 def validar_parametros(dados):
-    """
-    Valida cada item comparando valor_real com [normal_min, normal_max].
-    Retorna lista de anomalias: [{'item': str, 'valor_real': float, 'status': 'abaixo'/'acima', 'normal_min': float, 'normal_max': float, 'conselhos': str}]
-    """
     anomalias = []
     for d in dados:
-        if not isinstance(d.get('valor_real'), (int, float)) or not isinstance(d.get('normal_min'), (int, float)) or not isinstance(d.get('normal_max'), (int, float)):
-            continue  # Ignora inválidos
-        
-        if d['valor_real'] < d['normal_min']:
+        if 'valor_real' not in d or 'normal_min' not in d or 'normal_max' not in d:
+            continue
+        try:
+            valor = float(d['valor_real'])
+            min_val = float(d['normal_min'])
+            max_val = float(d['normal_max'])
+        except ValueError:
+            continue
+
+        if valor < min_val:
             status = 'abaixo'
-        elif d['valor_real'] > d['normal_max']:
+        elif valor > max_val:
             status = 'acima'
         else:
             continue
-        
+
         anomalias.append({
-            'item': d['item'],
-            'valor_real': d['valor_real'],
+            'item': d.get('item', 'Desconhecido'),
+            'valor_real': valor,
             'status': status,
-            'normal_min': d['normal_min'],
-            'normal_max': d['normal_max'],
-            'conselhos': d['conselhos']
+            'normal_min': min_val,
+            'normal_max': max_val,
+            'conselhos': d.get('conselhos', 'N/A')
         })
-    
+
     logging.info(f"Encontradas {len(anomalias)} anomalias.")
     return anomalias
 
 def gerar_relatorio(pdf_path, nome_terapeuta, registro_terapeuta, output_path):
-    """
-    Gera um DOCX com relatório de anomalias e dados completos.
-    """
     try:
-        dados = extrair_parametros_valores(pdf_path)  # Re-extrai para consistência
+        dados = extrair_parametros_valores(pdf_path)
         anomalias = validar_parametros(dados)
         
         doc = Document()
         doc.add_heading('Relatório de Anomalias - MTC Insight', 0)
         
-        # Cabeçalho terapeuta
         p = doc.add_paragraph()
         p.add_run(f"Terapeuta: {nome_terapeuta}\nRegistro: {registro_terapeuta}\n").bold = True
         
-        # Seção de Anomalias
         doc.add_heading('Anomalias Detectadas', level=1)
         if not anomalias:
-            doc.add_paragraph('Nenhuma anomalia encontrada. Todos os parâmetros estão normais.')
+            doc.add_paragraph('Nenhuma anomalia encontrada.')
         else:
             for a in anomalias:
                 doc.add_paragraph(
                     f"- {a['item']}: {a['valor_real']} ({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})\n"
-                    f"  Conselhos: {a['conselhos']}",
-                    style='List Bullet'
+                    f"  Conselhos: {a['conselhos']}"
                 )
         
-        # Seção de Dados Completos (para referência)
-        doc.add_heading('Dados Extraídos Completos', level=1)
+        doc.add_heading('Dados Completos', level=1)
         for d in dados:
             doc.add_paragraph(
-                f"Sistema: {d.get('sistema', 'N/A')}\nItem: {d.get('item', 'N/A')}\nNormal: {d.get('normal_min', 'N/A')}–{d.get('normal_max', 'N/A')}\nValor Real: {d.get('valor_real', 'N/A')}\nConselhos: {d.get('conselhos', 'N/A')}\n",
-                style='Normal'
+                f"Sistema: {d.get('sistema', 'N/A')}\nItem: {d.get('item', 'N/A')}\nNormal: {d.get('normal_min', 'N/A')}–{d.get('normal_max', 'N/A')}\nValor: {d.get('valor_real', 'N/A')}\nConselhos: {d.get('conselhos', 'N/A')}\n"
             )
         
         doc.save(output_path)
         logging.info(f"Relatório gerado em {output_path}")
     
     except Exception as e:
-        logging.error(f"Erro na geração do relatório: {str(e)}")
+        logging.error(f"Erro na geração: {str(e)}")
         raise
+
+# OPCIONAL: Para PDFs com imagens (OCR) - descomente e instale pytesseract e pdf2image se necessário
+# import pytesseract
+# from pdf2image import convert_from_path
+# def extrair_texto_com_ocr(pdf_path):
+#     images = convert_from_path(pdf_path)
+#     texto = ""
+#     for image in images:
+#         texto += pytesseract.image_to_string(image) + "\n"
+#     return texto
+# # Então, no extrair_parametros_valores, se pdfplumber falhar, chame extrair_texto_com_ocr e parseie o texto.

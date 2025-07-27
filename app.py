@@ -8,7 +8,7 @@ from validacao_dinamica import (
     extrair_parametros_valores,
     validar_parametros,
     gerar_relatorio,
-)
+)   
 
 # ========================================
 # LOGIN SIMPLES (para produção, use st.secrets ou banco de dados com hashing)
