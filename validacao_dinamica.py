@@ -42,21 +42,27 @@ def _explode_nome(raw_nome: str):
     # remove duplicidades ocasionais
     return [p for i, p in enumerate(partes) if p and p not in partes[:i]]
 
+def _is_param_row(col3: str, col4: str):
+    """Verdadeiro se col3 tiver ≥2 números (faixa) e col4 tiver 1 número (valor)."""
+    return len(_list_numeros(col3)) >= 2 and len(_list_numeros(col4)) == 1
+
+
 def extrair_parametros_valores(pdf_path: str) -> dict:
     """
-    Versão 6 – junta:
-        • todos os pedaços antes da linha-núcleo;
-        • só os pedaços depois CUJO primeiro carácter NÃO é maiúsculo.
-    Assim evitamos ‘grudar’ o nome do próximo parâmetro.
+    Versão 7 — regras:
+        • linha-parâmetro = col3 (mín, máx) + col4 (valor)
+        • junta somente as linhas imediatamente DEPOIS que não contenham
+          números e comecem por minúscula / '('  (continuação do nome).
     """
     resultado = {}
+
     cfg = dict(
         vertical_strategy="lines",
         horizontal_strategy="lines",
         intersection_y_tolerance=10,
     )
 
-    # ── carrega todas as linhas
+    # ── carrega todas as linhas já “limpas” numa lista
     linhas = []
     with pdfplumber.open(pdf_path) as pdf:
         for pg in pdf.pages:
@@ -64,48 +70,43 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
                 for r in tb:
                     if len(r) < 4:
                         continue
-                    c2, c3, c4 = map(_clean, r[1:4])
-                    linhas.append(
-                        dict(
-                            nome=c2,
-                            faixa=c3,
-                            valor=c4,
-                            nums=_row_numbers(" ".join([c2, c3, c4])),
-                        )
-                    )
+                    col2, col3, col4 = map(_clean, r[1:4])
+                    linhas.append((col2, col3, col4))
 
-    buffer = []  # partes antes
     i = 0
     while i < len(linhas):
-        ln = linhas[i]
+        nome, faixa, valor = linhas[i]
 
-        if len(ln["nums"]) < 3:          # ainda não é linha-núcleo
-            if ln["nome"]:
-                buffer.append(ln["nome"])
+        # se não é linha-parâmetro → pula
+        if not _is_param_row(faixa, valor):
             i += 1
             continue
 
-        # ── linha-núcleo (tem min, max, valor)
-        min_, max_, val = ln["nums"][:3]
-        base = " ".join(buffer + [ln["nome"]]).strip()
-        buffer = []                      # limpa para o próximo parâmetro
+        # pega intervalo e valor
+        minimo, maximo = map(_num, _list_numeros(faixa)[:2])
+        valor_medido   = _num(_list_numeros(valor)[0])
 
-        # pega pedaços DEPOIS que comecem por minúscula / '('
-        j, pos = i + 1, []
-        while j < len(linhas) and len(linhas[j]["nums"]) < 3:
-            nm = linhas[j]["nome"]
-            if nm and (nm[0].islower() or nm[0] == "("):
-                pos.append(nm)
-                j += 1
-            else:
-                break                    # maiúscula ⇒ novo parâmetro
-        nome_final = " ".join([base] + pos).strip()
+        # nome base
+        partes = [nome.strip()] if nome else []
 
-        # explode se houver vários parâmetros na MESMA célula
-        for n in _explode_nome(nome_final):
-            resultado[n] = {"min": min_, "max": max_, "valor": val}
+        # olha somente as PRÓXIMAS linhas sem números (continuação)
+        j = i + 1
+        while j < len(linhas):
+            nm_next, faixa_next, valor_next = linhas[j]
+            if nm_next and not (_list_numeros(faixa_next) or _list_numeros(valor_next)):
+                if nm_next[0].islower() or nm_next[0] == "(":
+                    partes.append(nm_next.strip())
+                    j += 1
+                    continue
+            break  # parou na 1ª linha que não é continuação
 
-        i = j                            # continua dali
+        nome_completo = " ".join(partes)
+
+        # se, MESMA célula, vierem 2+ itens colados → divide
+        for n in _explode_nome(nome_completo):
+            resultado[n] = {"min": minimo, "max": maximo, "valor": valor_medido}
+
+        i = j  # continua depois das linhas consumidas
 
     return resultado
 
