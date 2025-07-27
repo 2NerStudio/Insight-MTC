@@ -8,8 +8,7 @@ def _clean(txt: str) -> str:
     """Limpa a string, substituindo quebras de linha e vírgulas por pontos."""
     if not txt:
         return ""
-    # Remove quebras de linha, acentos problemáticos e troca vírgula por ponto.
-    return txt.replace("\n", " ").replace("\r", " ").replace(",", ".").replace("’", "").replace("'", "").strip()
+    return txt.replace("\n", " ").replace("\r", " ").replace(",", ".").strip()
 
 def _list_numeros(txt: str):
     """Extrai todos os números (inteiros ou decimais) de uma string."""
@@ -22,41 +21,16 @@ def _num(txt: str):
     except (ValueError, TypeError):
         return None
 
-def _explode_nome(raw_nome: str):
-    """
-    Se o nome contiver vários parâmetros colados, tenta separá-los.
-    Isso lida com casos onde o PDF agrupa itens como 'Níquel Flúor'.
-    A heurística tenta quebrar a string se uma palavra começa com letra maiúscula
-    no meio da string (indicando um novo item).
-    """
-    # Regex para encontrar palavras que começam com maiúscula (e não são a primeira palavra)
-    # Isso quebra "NiquelFluor" em "Niquel", "Fluor"
-    # ou "Índice de alergia ao pólen Índice de alergia a poeira" em duas partes.
-    parts = re.split(r'\s+(?=[A-ZÁÉÍÓÚ])', raw_nome)
-    
-    # Caso especial para texto como 'Insulina)' que o regex pode não pegar bem
-    if ') ' in raw_nome:
-        parts = [p.strip() for p in raw_nome.split(') ')]
-        parts = [p + (')' if not p.endswith(')') else '') for p in parts if p]
-
-    return [p.strip() for p in parts if p.strip()]
-
-def _is_param_row(col3: str, col4: str) -> bool:
-    """
-    Verifica se uma linha é uma linha de parâmetro.
-    Regra: A 3ª coluna (intervalo) deve ter 2 números (mín-máx) e
-           a 4ª coluna (valor) deve ter 1 número.
-    """
-    return len(_list_numeros(col3)) >= 2 and len(_list_numeros(col4)) == 1
+def _is_param_row(faixa: str, valor: str) -> bool:
+    """Verifica se uma linha contém os dados numéricos de um parâmetro."""
+    return len(_list_numeros(faixa)) >= 2 and len(_list_numeros(valor)) == 1
 # ╰──────────────────────────────────────────────────────╯
 
 
 def extrair_parametros_valores(pdf_path: str) -> dict:
     """
-    Versão final e robusta.
-    Usa uma lógica de buffer para montar corretamente nomes de itens que
-    se estendem por várias linhas, processando-os quando a linha com
-    os dados numéricos é encontrada.
+    Versão final e robusta que lida com nomes de múltiplas linhas e descarta
+    cabeçalhos de categoria, prevenindo a concatenação incorreta.
     """
     resultado = {}
     cfg = dict(
@@ -66,7 +40,9 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
     )
 
     with pdfplumber.open(pdf_path) as pdf:
-        partes_nome_buffer = []
+        # Buffer para armazenar partes de nomes de itens que vêm em linhas anteriores
+        buffer_nome = []
+
         for pg in pdf.pages:
             tabelas = pg.extract_tables(cfg)
             if not tabelas:
@@ -77,46 +53,41 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
                     if len(row) < 4:
                         continue
 
-                    # Limpa as colunas relevantes
-                    nome_item, faixa, valor = map(_clean, (row[1], row[2], row[3]))
+                    nome, faixa, valor = map(_clean, (row[1], row[2], row[3]))
 
-                    # Se a linha ATUAL contém os dados numéricos, é hora de processar.
+                    # Se a linha atual contém os dados numéricos
                     if _is_param_row(faixa, valor):
-                        # Junta o buffer com o texto da linha atual para formar o nome completo
-                        if nome_item:
-                            partes_nome_buffer.append(nome_item)
+                        # Constrói o nome completo usando o buffer + o nome da linha atual
+                        nome_completo_parts = buffer_nome
+                        if nome:
+                            nome_completo_parts.append(nome)
                         
-                        nome_completo = " ".join(partes_nome_buffer)
+                        nome_completo = " ".join(nome_completo_parts).strip()
 
-                        # Extrai os dados numéricos
-                        numeros_faixa = _list_numeros(faixa)
-                        numero_valor = _list_numeros(valor)
-                        minimo = _num(numeros_faixa[0])
-                        maximo = _num(numeros_faixa[1])
-                        valor_medido = _num(numero_valor[0])
+                        if nome_completo:
+                            numeros_faixa = _list_numeros(faixa)
+                            numero_valor = _list_numeros(valor)
+                            minimo = _num(numeros_faixa[0])
+                            maximo = _num(numeros_faixa[1])
+                            valor_medido = _num(numero_valor[0])
 
-                        # A função _explode_nome lida com casos como "Níquel Flúor"
-                        # que podem ter sido agrupados na mesma linha de texto.
-                        nomes_individuais = _explode_nome(nome_completo)
+                            if all(v is not None for v in [minimo, maximo, valor_medido]):
+                                resultado[nome_completo] = {
+                                    "min": minimo,
+                                    "max": maximo,
+                                    "valor": valor_medido
+                                }
+                        
+                        # Limpa o buffer pois o item foi processado
+                        buffer_nome = []
 
-                        # Se explodiu em vários nomes, assume que os dados pertencem ao PRIMEIRO.
-                        # Isso é uma heurística necessária para o formato do seu PDF.
-                        # Para os demais itens, não temos os valores, então não podemos adicioná-los.
-                        item_principal = nomes_individuais[0]
+                    # Se for uma linha apenas com texto (sem dados numéricos)
+                    elif nome:
+                        # Se o buffer já continha texto, a linha anterior era um cabeçalho.
+                        # Descarta o cabeçalho e começa um novo buffer com o texto atual.
+                        # Se o buffer estava vazio, apenas adiciona o texto.
+                        buffer_nome = [nome]
 
-                        if all(v is not None for v in [minimo, maximo, valor_medido]):
-                             resultado[item_principal] = {
-                                "min": minimo,
-                                "max": maximo,
-                                "valor": valor_medido
-                            }
-
-                        # CRUCIAL: Reseta o buffer para o próximo item
-                        partes_nome_buffer = []
-
-                    # Se não é uma linha com dados, e tem texto, acumula no buffer.
-                    elif nome_item:
-                        partes_nome_buffer.append(nome_item)
     return resultado
 
 
@@ -160,9 +131,7 @@ def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomal
             raise ValueError("Não foi possível extrair parâmetros válidos do arquivo PDF.")
 
         anomalias = validar_parametros(dados)
-        
-        # Ordena as anomalias alfabeticamente pelo nome do item para um relatório consistente
-        anomalias_sorted = sorted(anomalias, key=lambda x: x['item'])
+        anomalias_sorted = sorted(anomalias, key=lambda x: x['item']) # Ordena para consistência
 
         linhas = [
             "Relatório de Anomalias",
@@ -174,6 +143,7 @@ def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomal
         else:
             linhas.append(f"⚠️ {len(anomalias_sorted)} anomalias encontradas:")
             for a in anomalias_sorted:
+                # Formata os números para 3 casas decimais para uma exibição limpa
                 linhas.append(
                     f"• {a['item']}: {a['valor_real']:.3f} "
                     f"({a['status']} do normal; "
