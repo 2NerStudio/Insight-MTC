@@ -7,12 +7,13 @@ import sys
 def _clean(txt: str) -> str:
     if not txt:
         return ""
+    # Normaliza e preserva parênteses úteis
+    txt = re.sub(r'\s+', ' ', txt).strip()
     return (
-        re.sub(r'\s+', ' ', txt)  # Normaliza espaços
-        .replace("\n", " ").replace("\r", " ")
+        txt.replace("\n", " ").replace("\r", " ")
         .replace(",", ".").replace("’", "").replace("'", "")
-        .replace("–", "-").replace("--", "-").replace(")", "").replace("do)", "do")
-        .strip()
+        .replace("–", "-").replace("--", "-")
+        .replace("()", "")  # Remove parênteses vazios, mas mantém (TBA)
     )
 
 def _list_numeros(txt: str):
@@ -30,7 +31,7 @@ def _is_param_row(col3: str, col4: str) -> bool:
 
 def _explode_nome(raw_nome: str):
     """
-    Divide nomes colados de forma inteligente, com agrupamento de compostos e filtro de fragmentos.
+    Divide nomes colados de forma avançada, preservando compostos com parênteses e juntando logicamente.
     """
     raw_nome = _clean(raw_nome)
     if not raw_nome:
@@ -43,17 +44,17 @@ def _explode_nome(raw_nome: str):
             raw_nome = raw_nome[len(h):].strip()
 
     # Divisão primária por separadores fortes
-    partes = re.split(r':|KATEX_INLINE_CLOSE\s|\s{2,}|α-', raw_nome)
+    partes = re.split(r':|KATEX_INLINE_CLOSE\s{1,}|\s{2,}|α-', raw_nome)
     partes = [p.strip(" -") for p in partes if p.strip()]
 
-    # Divisão secundária por padrões de título (sequências com maiúsculas internas permitidas)
-    upper_pattern = r'[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ][a-záàâãéèêíóôõúç0-9\sKATEX_INLINE_OPENKATEX_INLINE_CLOSE/-]*?(?=\s[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ][A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ]|\Z)'
+    # Divisão secundária: captura frases completas, incluindo parênteses
+    upper_pattern = r'[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ][a-záàâãéèêíóôõúç0-9\sKATEX_INLINE_OPENKATEX_INLINE_CLOSE/-]*?(?=\s[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ][^a-záàâãéèêíóôõúç]|\Z)'
     exploded = []
     for p in partes:
-        subs = re.findall(upper_pattern, p)
+        subs = re.findall(upper_pattern, p + ' ')  # Adiciona espaço para matching final
         exploded.extend([sub.strip() for sub in subs if sub.strip()])
 
-    # Agrupamento avançado: junta preposições, minúsculas e fragmentos curtos
+    # Agrupamento avançado: junta preposições, acrônimos em parênteses, vitaminas, etc.
     final = []
     for part in exploded:
         if not final:
@@ -63,31 +64,35 @@ def _explode_nome(raw_nome: str):
         if (
             part.lower() in {'da', 'do', 'de', 'e', 'e'}  # Preposições
             or part[0].islower()  # Continuações minúsculas
-            or (len(part) < 10 and last.endswith(' ') or last.endswith('-'))  # Fragmentos curtos
-            or ('Vitamina' in last and part.startswith('B') or part.startswith('K'))  # Vitaminas específicas
+            or (len(part) < 10 and (last.endswith(' ') or last.endswith('-') or last.endswith('(')))  # Fragmentos ou parênteses abertos
+            or (last.endswith('(') and part.endswith(')'))  # Fecha parênteses, ex.: (TBA)
+            or ('Vitamina' in last and (part.startswith('B') or part.startswith('K')))  # Vitaminas
+            or last.endswith('do') or last.endswith('da')  # Conecta ex.: "Índice do" + "baço"
         ):
-            final[-1] = f"{last} {part}"  # Junta ao anterior
+            final[-1] = f"{last} {part}".strip()
         else:
             final.append(part)
 
-    # Filtro de duplicatas, ruídos, incompletos (terminam com 'e' ou ':') e itens curtos
+    # Filtro de duplicatas, ruídos, incompletos e itens curtos
     ignore = {
         'ITEM', 'DE', 'TESTE', 'Sistema', 'Meridiano', 'Meridiano do', 'Meridiano da', 'do', 'da', 'e',
         'Afrouxamento e', 'Saturação do oxigênio do', 'Pressão do', 'oxigênio do sangue cerebrovascular',
         'Vitamina', 'Índice de', 'Desintoxicação e', 'Shao', 'Tai', 'Yin da mão', 'Yang do', 'Yang da',
-        'Triplo', 'Aquecedor', 'Vital', 'queda'  # Adicione mais se necessário
+        'Triplo', 'Aquecedor', 'Vital', 'queda', 'BA', 'V', 'Sa', 'Yang do Pé Triplo',  # Novos da saída
+        'Índice do baço Tiroglobulina', 'Grau de hiperplasia óssea Linha epifisária',  # Agrupamentos ruins
+        'Urobilinogênio Nitrogênio uréico Atividade pulmonar'  # Colagens específicas
     }
     final = [
         p for i, p in enumerate(final)
-        if p and len(p) >= 4 and p not in ignore and p not in final[:i]
-        and not p.endswith('e') and not p.endswith(':') and not p.endswith(' e')
+        if p and len(p) >= 5 and p not in ignore and p not in final[:i]
+        and not p.endswith(('e', ':', 'do', 'da', 'de', ' e'))
     ]
 
     return final
 
 def extrair_parametros_valores(pdf_path: str) -> dict:
     """
-    Versão 11 – refinada para agrupamento inteligente de nomes compostos e filtro aprimorado.
+    Versão 12 – foco em preservação de nomes compostos com parênteses e filtro de fragmentos parciais.
     """
     resultado = {}
 
@@ -115,9 +120,9 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
     while i < len(linhas):
         nome, faixa, valor = linhas[i]
 
-        # Se ainda não é linha-parâmetro, acumula no buffer SE NÃO for cabeçalho ou ignorável
+        # Se ainda não é linha-parâmetro, acumula no buffer SE NÃO for cabeçalho ou muito curto
         if not _is_param_row(faixa, valor):
-            if nome and not any(h in nome for h in headers_ignore) and nome not in headers_ignore:
+            if nome and len(nome) >= 5 and not any(h in nome for h in headers_ignore) and nome not in headers_ignore:
                 buffer_antes.append(nome.strip())
             i += 1
             continue
@@ -131,14 +136,14 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
         valor_medido = _num(_list_numeros(valor)[0]) if _list_numeros(valor) else None
 
         # Nome começa com buffer + próprio nome (se válido)
-        partes_nome = buffer_antes + ([nome.strip()] if nome and not any(h in nome for h in headers_ignore) else [])
+        partes_nome = buffer_antes + ([nome.strip()] if nome and len(nome) >= 5 and not any(h in nome for h in headers_ignore) else [])
         buffer_antes = []  # zera
 
         # Junta linhas seguintes que NÃO sejam parâmetro
         j = i + 1
         while j < len(linhas) and not _is_param_row(linhas[j][1], linhas[j][2]):
             nm_next = linhas[j][0]
-            if nm_next and not any(h in nm_next for h in headers_ignore):
+            if nm_next and len(nm_next) >= 5 and not any(h in nm_next for h in headers_ignore):
                 partes_nome.append(nm_next.strip())
             j += 1
 
@@ -149,14 +154,15 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
             i = j
             continue
 
-        # Divide e associa valores
+        # Divide e associa valores, evitando duplicatas por valor
         nomes_divididos = _explode_nome(nome_completo)
         for n in nomes_divididos:
-            resultado[n] = {"min": minimo, "max": maximo, "valor": valor_medido}
+            key = (n, valor_medido)  # Evita duplicatas por nome+valor
+            if key not in resultado:
+                resultado[key] = {"min": minimo, "max": maximo, "valor": valor_medido}
 
-        i = j
-
-    return resultado
+    # Converte de volta para dict simples (remove tupla key)
+    return {k[0]: v for k, v in resultado.items()}
 
 def validar_parametros(dados: dict):
     anom = []
