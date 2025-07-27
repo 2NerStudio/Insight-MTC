@@ -9,7 +9,8 @@ def _clean(txt: str) -> str:
         return ""
     return (
         txt.replace("\n", " ").replace("\r", " ")
-        .replace(",", ".").replace("’", "").replace("'", "").strip()
+        .replace(",", ".").replace("’", "").replace("'", "")
+        .replace("–", "-").replace("   ", " ").strip()
     )
 
 def _list_numeros(txt: str):
@@ -30,17 +31,35 @@ def _row_numbers(texto: str):
 def _explode_nome(raw_nome: str):
     """
     Se o nome contiver vários parâmetros colados,
-    tenta separá-los por ':'  ou ') '  ou  '  '  (dois espaços).
+    tenta separá-los por ':'  ou ') '  ou por inícios de maiúsculas.
     """
+    raw_nome = _clean(raw_nome)
+    if not raw_nome:
+        return []
+
+    # Divisão original por : ou ) 
     if ":" in raw_nome:
         partes = [p.strip(" -") for p in raw_nome.split(":") if p.strip()]
     elif ") " in raw_nome:
         partes = [p.strip(" -") for p in raw_nome.split(") ") if p.strip()]
-        partes = [p + (")" if not p.endswith(")") else "") for p in partes]
+        partes = [p + ")" if not p.endswith(")") else p for p in partes]
     else:
         partes = [raw_nome]
-    # remove duplicidades ocasionais
-    return [p for i, p in enumerate(partes) if p and p not in partes[:i]]
+
+    # Para cada parte, tenta dividir ainda mais por frases iniciando com maiúscula
+    upper = r'[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ]'  # Maiúsculas comuns em português
+    pattern = fr'.*?(?=\s{upper}|$)'
+    exploded = []
+    for p in partes:
+        subs = re.findall(pattern, p)
+        subs = [sub.strip() for sub in subs if sub.strip()]
+        if subs:
+            exploded.extend(subs)
+        else:
+            exploded.append(p)
+
+    # Remove duplicidades
+    return [p for i, p in enumerate(exploded) if p and p not in exploded[:i]]
 
 def _is_param_row(col3: str, col4: str) -> bool:
     """Linha-parâmetro = 3ª coluna (mín-máx) tem ≥2 números  E  4ª coluna tem 1 número."""
