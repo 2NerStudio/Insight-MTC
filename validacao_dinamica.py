@@ -8,9 +8,11 @@ def _clean(txt: str) -> str:
     if not txt:
         return ""
     return (
-        txt.replace("\n", " ").replace("\r", " ")
+        re.sub(r'\s+', ' ', txt)  # Normaliza espaços
+        .replace("\n", " ").replace("\r", " ")
         .replace(",", ".").replace("’", "").replace("'", "")
-        .replace("–", "-").replace("  ", " ").replace("--", "-").strip()
+        .replace("–", "-").replace("--", "-").replace(")", "")  # Remove ) isolados
+        .strip()
     )
 
 def _list_numeros(txt: str):
@@ -23,53 +25,57 @@ def _num(txt: str):
         return None
 # ╰──────────────────────────────────────────────────────╯
 
-
-def _row_numbers(texto: str):
-    "Retorna lista de todos os floats contidos na string."
-    return [_num(x) for x in re.findall(r"[-+]?\d+(?:[.,]\d+)?", texto)]
+def _is_param_row(col3: str, col4: str) -> bool:
+    """Linha-parâmetro = 3ª coluna (mín-máx) tem ≥2 números E 4ª coluna tem 1 número."""
+    return len(_list_numeros(col3)) >= 2 and len(_list_numeros(col4)) == 1
 
 def _explode_nome(raw_nome: str):
     """
-    Se o nome contiver vários parâmetros colados,
-    tenta separá-los por ':'  ou ') '  ou '  ' (dois espaços) ou 'α-'.
+    Divide nomes colados de forma inteligente: por separadores, depois por padrões de título (maiúsculas).
+    Filtra ruídos e agrupa continuações em minúsculas.
     """
     raw_nome = _clean(raw_nome)
     if not raw_nome:
         return []
 
-    # Divisão por : ou ) 
-    if ":" in raw_nome:
-        partes = [p.strip(" -") for p in raw_nome.split(":") if p.strip()]
-    elif ") " in raw_nome:
-        partes = [p.strip(" -") for p in raw_nome.split(") ") if p.strip()]
-        partes = [p + ")" if not p.endswith(")") else p for p in partes]
-    else:
-        partes = [raw_nome]
+    # Remove cabeçalhos conhecidos no início
+    headers = ["ITEM DE TESTE", "ITEM", "DE", "TESTE"]
+    for h in headers:
+        if raw_nome.startswith(h):
+            raw_nome = raw_nome[len(h):].strip()
 
-    # Divisão adicional por dois espaços ou 'α-' se a parte for longa
+    # Divisão primária por separadores
+    partes = re.split(r':|KATEX_INLINE_CLOSE\s|\s{2,}|α-', raw_nome)
+    partes = [p.strip(" -") for p in partes if p.strip()]
+
+    # Divisão secundária por padrões de título (sequências começando com maiúscula)
+    upper_pattern = r'[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ][a-záàâãéèêíóôõúç0-9\sKATEX_INLINE_OPENKATEX_INLINE_CLOSE/-]*?(?=[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ]|$)'
     exploded = []
     for p in partes:
-        if len(p) > 50 or 'α-' in p:  # Apenas para strings longas ou com 'α-'
-            subs = re.split(r'\s{2,}|α-', p)
-            subs = [sub.strip() for sub in subs if sub.strip()]
-            exploded.extend(subs)
+        subs = re.findall(upper_pattern, p)
+        exploded.extend([sub.strip() for sub in subs if sub.strip()])
+
+    # Agrupa continuações em minúsculas ao item anterior
+    final = []
+    for part in exploded:
+        if part and part[0].islower() and final:
+            final[-1] += " " + part  # Anexa ao anterior
         else:
-            exploded.append(p)
+            final.append(part)
 
-    # Remove duplicidades e itens indesejados (como cabeçalhos)
-    ignore = {'ITEM', 'DE', 'TESTE'}  # Adicione mais se necessário, ex.: 'Sistema'
-    exploded = [p for i, p in enumerate(exploded) if p and p not in exploded[:i] and p not in ignore and len(p) >= 3]
+    # Filtro de duplicatas, ruídos e itens curtos
+    ignore = {
+        'ITEM', 'DE', 'TESTE', 'Sistema', 'Meridiano', 'Meridiano do', 'do', 
+        'da', 'e', 'Afrouxamento e', 'Saturação do oxigênio do', 'Pressão do', 
+        'oxigênio do sangue cerebrovascular'  # Adicione mais baseados em padrões
+    }
+    final = [p for i, p in enumerate(final) if p and len(p) >= 4 and p not in ignore and p not in final[:i]]
 
-    return exploded
-
-def _is_param_row(col3: str, col4: str) -> bool:
-    """Linha-parâmetro = 3ª coluna (mín-máx) tem ≥2 números  E  4ª coluna tem 1 número."""
-    return len(_list_numeros(col3)) >= 2 and len(_list_numeros(col4)) == 1
-
+    return final
 
 def extrair_parametros_valores(pdf_path: str) -> dict:
     """
-    Versão 9 – corrigida para divisão menos agressiva e remoção de cabeçalhos.
+    Versão 10 – otimizada para filtrar cabeçalhos e dividir nomes colados de forma inteligente.
     """
     resultado = {}
 
@@ -92,43 +98,47 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
 
     # ── percorre com índice i
     i = 0
-    buffer_antes = []          # pedaços que vêm antes da 1ª linha-parâmetro
+    buffer_antes = []  # pedaços que vêm antes da 1ª linha-parâmetro
+    headers_ignore = {"ITEM", "DE", "TESTE", "ITEM DE TESTE"}  # Ignora cabeçalhos ao acumular
     while i < len(linhas):
         nome, faixa, valor = linhas[i]
 
-        # Se ainda não é linha-parâmetro, acumula no buffer e segue
+        # Se ainda não é linha-parâmetro, acumula no buffer SE NÃO for cabeçalho
         if not _is_param_row(faixa, valor):
-            if nome:
+            if nome and not any(h in nome for h in headers_ignore):
                 buffer_antes.append(nome.strip())
             i += 1
             continue
 
         # —— encontramos a linha-parâmetro ——————————————
-        minimo, maximo = map(_num, _list_numeros(faixa)[:2])
-        valor_medido   = _num(_list_numeros(valor)[0])
+        numeros_faixa = _list_numeros(faixa)
+        if len(numeros_faixa) < 2:
+            i += 1
+            continue
+        minimo, maximo = map(_num, numeros_faixa[:2])
+        valor_medido = _num(_list_numeros(valor)[0]) if _list_numeros(valor) else None
 
-        # Nome começa com o que estava antes + próprio nome da linha
-        partes_nome = buffer_antes + ([nome.strip()] if nome else [])
-        buffer_antes = []  # zera para próximo ciclo
+        # Nome começa com buffer + próprio nome (se não for cabeçalho)
+        partes_nome = buffer_antes + ([nome.strip()] if nome and not any(h in nome for h in headers_ignore) else [])
+        buffer_antes = []  # zera
 
-        # Junta TODAS as linhas seguintes que NÃO sejam parâmetro
+        # Junta linhas seguintes que NÃO sejam parâmetro
         j = i + 1
         while j < len(linhas) and not _is_param_row(linhas[j][1], linhas[j][2]):
             nm_next = linhas[j][0]
-            if nm_next:
+            if nm_next and not any(h in nm_next for h in headers_ignore):
                 partes_nome.append(nm_next.strip())
             j += 1
 
         nome_completo = " ".join(partes_nome)
 
-        # Se vieram 2+ itens na mesma célula, divide
+        # Divide e associa valores
         for n in _explode_nome(nome_completo):
             resultado[n] = {"min": minimo, "max": maximo, "valor": valor_medido}
 
-        i = j  # continua a partir da próxima linha-parâmetro
+        i = j
 
     return resultado
-
 
 def validar_parametros(dados: dict):
     anom = []
@@ -148,13 +158,11 @@ def validar_parametros(dados: dict):
             )
     return anom
 
-
 def _to_docx(texto: str, path: str):
     doc = Document()
     for linha in texto.split("\n"):
         doc.add_paragraph(linha)
     doc.save(path)
-
 
 def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
     try:
@@ -184,7 +192,6 @@ def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomal
         return True, output_path
     except Exception as e:
         return False, str(e)
-
 
 # CLI (opcional)
 if __name__ == "__main__":
