@@ -42,17 +42,17 @@ def _explode_nome(raw_nome: str):
     # remove duplicidades ocasionais
     return [p for i, p in enumerate(partes) if p and p not in partes[:i]]
 
-def _is_param_row(col3: str, col4: str):
-    """Verdadeiro se col3 tiver ≥2 números (faixa) e col4 tiver 1 número (valor)."""
+def _is_param_row(col3: str, col4: str) -> bool:
+    """Linha-parâmetro = 3ª coluna (mín-máx) tem ≥2 números  E  4ª coluna tem 1 número."""
     return len(_list_numeros(col3)) >= 2 and len(_list_numeros(col4)) == 1
 
 
 def extrair_parametros_valores(pdf_path: str) -> dict:
     """
-    Versão 7 — regras:
-        • linha-parâmetro = col3 (mín, máx) + col4 (valor)
-        • junta somente as linhas imediatamente DEPOIS que não contenham
-          números e comecem por minúscula / '('  (continuação do nome).
+    Versão 8 – definitiva
+    • identifica a linha-parâmetro como acima
+    • junta TODAS as linhas sem números entre esta e a próxima linha-parâmetro
+    • mantém as partes antes (caso ‘Viscosidade do’   +   linha-parâmetro)
     """
     resultado = {}
 
@@ -62,51 +62,53 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
         intersection_y_tolerance=10,
     )
 
-    # ── carrega todas as linhas já “limpas” numa lista
+    # ── carrega todas as linhas da(s) tabelas
     linhas = []
     with pdfplumber.open(pdf_path) as pdf:
         for pg in pdf.pages:
             for tb in pg.extract_tables(cfg):
-                for r in tb:
-                    if len(r) < 4:
+                for row in tb:
+                    if len(row) < 4:
                         continue
-                    col2, col3, col4 = map(_clean, r[1:4])
-                    linhas.append((col2, col3, col4))
+                    c2, c3, c4 = map(_clean, row[1:4])
+                    linhas.append((c2, c3, c4))  # (nome, faixa, valor)
 
+    # ── percorre com índice i
     i = 0
+    buffer_antes = []          # pedaços que vêm antes da 1ª linha-parâmetro
     while i < len(linhas):
         nome, faixa, valor = linhas[i]
 
-        # se não é linha-parâmetro → pula
+        # Se ainda não é linha-parâmetro, acumula no buffer e segue
         if not _is_param_row(faixa, valor):
+            if nome:
+                buffer_antes.append(nome.strip())
             i += 1
             continue
 
-        # pega intervalo e valor
+        # —— encontramos a linha-parâmetro ——————————————
         minimo, maximo = map(_num, _list_numeros(faixa)[:2])
         valor_medido   = _num(_list_numeros(valor)[0])
 
-        # nome base
-        partes = [nome.strip()] if nome else []
+        # Nome começa com o que estava antes + próprio nome da linha
+        partes_nome = buffer_antes + ([nome.strip()] if nome else [])
+        buffer_antes = []  # zera para próximo ciclo
 
-        # olha somente as PRÓXIMAS linhas sem números (continuação)
+        # Junta TODAS as linhas seguintes que NÃO sejam parâmetro
         j = i + 1
-        while j < len(linhas):
-            nm_next, faixa_next, valor_next = linhas[j]
-            if nm_next and not (_list_numeros(faixa_next) or _list_numeros(valor_next)):
-                if nm_next[0].islower() or nm_next[0] == "(":
-                    partes.append(nm_next.strip())
-                    j += 1
-                    continue
-            break  # parou na 1ª linha que não é continuação
+        while j < len(linhas) and not _is_param_row(linhas[j][1], linhas[j][2]):
+            nm_next = linhas[j][0]
+            if nm_next:
+                partes_nome.append(nm_next.strip())
+            j += 1
 
-        nome_completo = " ".join(partes)
+        nome_completo = " ".join(partes_nome)
 
-        # se, MESMA célula, vierem 2+ itens colados → divide
+        # Se vieram 2+ itens na mesma célula, divide por ':'  ') '  '  '
         for n in _explode_nome(nome_completo):
             resultado[n] = {"min": minimo, "max": maximo, "valor": valor_medido}
 
-        i = j  # continua depois das linhas consumidas
+        i = j  # continua a partir da próxima linha-parâmetro
 
     return resultado
 
