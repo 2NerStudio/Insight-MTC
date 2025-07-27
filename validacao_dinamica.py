@@ -25,56 +25,79 @@ def _num(txt: str):
 
 def extrair_parametros_valores(pdf_path: str) -> dict:
     """
-    Versão 3 – junta *todos* os pedaços de nome que aparecem
-    antes da linha que contém faixa+valor.
+    Versão 4  –  pega pedaços ANTES e DEPOIS da linha com números.
+    Resolve casos como:
+       • “Viscosidade do”   (linha com números)
+         “sangue”           (linha logo a seguir, sem números)
     """
     resultado = {}
-    buffer_nome = []          # pedaços acumulados
 
+    # Configuração da extração de tabelas
     cfg = dict(
         vertical_strategy="lines",
         horizontal_strategy="lines",
         intersection_y_tolerance=10,
     )
 
+    # Primeiro, coletamos todas as linhas numa lista simples
+    linhas = []  # cada item -> (nome, faixa, valor, tem_numeros)
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             for tabela in page.extract_tables(cfg):
-                for linha in tabela:
-                    if len(linha) < 4:
+                for row in tabela:
+                    if len(row) < 4:
                         continue
-
-                    nome  = _clean(linha[1])
-                    faixa = _clean(linha[2])
-                    valor = _clean(linha[3])
+                    nome  = _clean(row[1])
+                    faixa = _clean(row[2])
+                    valor = _clean(row[3])
 
                     tem_faixa = len(_list_numeros(faixa)) >= 2
                     tem_valor = len(_list_numeros(valor)) == 1
+                    tem_numeros = tem_faixa and tem_valor
 
-                    # 1) Linha só com texto (sem números)  → empilha
-                    if nome and not tem_faixa and not tem_valor:
-                        buffer_nome.append(nome)
-                        continue
+                    linhas.append((nome, faixa, valor, tem_numeros))
 
-                    # 2) Linha que contém os números  → fecha o parâmetro
-                    if nome and tem_faixa and tem_valor:
-                        nome_completo = " ".join(buffer_nome + [nome]).strip()
-                        buffer_nome = []  # zera para o próximo
+    # Agora processamos com ponteiro 'i'
+    i = 0
+    buffer_antes = []  # pedaços de nome antes da linha-núcleo
 
-                        minimo, maximo = map(_num, _list_numeros(faixa)[:2])
-                        valor_num      = _num(_list_numeros(valor)[0])
+    while i < len(linhas):
+        nome, faixa, valor, is_num = linhas[i]
 
-                        if nome_completo and minimo is not None and maximo is not None:
-                            resultado[nome_completo] = {
-                                "min": minimo,
-                                "max": maximo,
-                                "valor": valor_num,
-                            }
-                        continue
+        if not is_num:
+            # Ainda não chegamos à linha-núcleo → acumulo no buffer
+            if nome:
+                buffer_antes.append(nome)
+            i += 1
+            continue
 
-                    # 3) Qualquer outra linha inesperada → ignora
-                    #    (mas se quisermos ser ainda mais conservadores,
-                    #     poderíamos: if nome: buffer_nome.append(nome))
+        # Linha-núcleo encontrada  (tem faixa+valor)
+        # 1) junta os pedaços anteriores + próprio nome
+        partes_nome = buffer_antes + ([nome] if nome else [])
+        buffer_antes = []  # zera para o próximo parâmetro
+
+        minimo, maximo = map(_num, _list_numeros(faixa)[:2])
+        valor_num      = _num(_list_numeros(valor)[0])
+
+        # 2) olha as linhas logo DEPOIS, enquanto não aparecer nova linha-núcleo
+        j = i + 1
+        while j < len(linhas) and not linhas[j][3]:
+            nome_pos, _, _, _ = linhas[j]
+            if nome_pos:
+                partes_nome.append(nome_pos)
+            j += 1
+
+        nome_completo = " ".join(partes_nome).strip()
+        if nome_completo and minimo is not None and maximo is not None:
+            resultado[nome_completo] = {
+                "min": minimo,
+                "max": maximo,
+                "valor": valor_num,
+            }
+
+        # Continua a partir da próxima linha ainda não processada
+        i = j
+
     return resultado
 
 
