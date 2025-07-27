@@ -2,21 +2,54 @@ import re
 import logging
 import pdfplumber
 from docx import Document
+from difflib import get_close_matches  # Para correção baseada em similaridade
 
 logging.basicConfig(level=logging.INFO)
 
+# Lista de referência da tabela original para correção pós-parsing (baseada no seu input inicial)
+REFERENCIA_SISTEMAS = [
+    "Cardiovascular e Cerebrovascular", "Função Gastrointestinal", "Função do Fígado",
+    "Grande Função do Intestino", "Função da Vesícula Biliar", "Função Pancreática",
+    "Função Renal", "Função Pulmonar", "Sistema Nervoso", "Densidade Mineral Óssea",
+    "Índice de Crescimento Ósseo", "Minerais", "Vitaminas", "Aminoácidos", "Coenzima",
+    "Ácido Graxo", "Sistema Endócrino", "Sistema Imunológico", "Tiroide", "Metais Pesados",
+    "Alérgenos", "Obesidade", "Pele", "Olhos", "Colágeno", "Acupuntura", "Pulso do Coração e Cerebro",
+    "Lipidos Sangue", "Ginecologia", "Seios"
+]
+REFERENCIA_ITENS = [  # Itens comuns para matching
+    "Viscosidade do sangue", "Elasticidade dos vasos sanguíneos do cérebro", "Coeficiente de secreção de pepsina",
+    "Metabolismo de proteínas", "Coeficiente de absorção do cólon", "Globulina do soro sanguíneo (A/G)",
+    "Ácido biliar total do soro sanguíneo (TBA)", "Insulina", "Urobilinogênio", "Nitrogênio uréico",
+    "Atividade pulmonar VC", "Resistência das vias aéreas RAM", "Condição das funções neurológicas",
+    "Coeficiente de oesteoclastos", "Grau de hiperplasia óssea", "Linha epifisária", "Níquel", "Flúor",
+    "Vitamina B6", "Vitamina B12", "Vitamina K", "Treonina", "Isoleucina", "Arginina", "Ácido pantotênico",
+    "α-Ácido linolênico", "Índice de secreção da pituitária", "Índice do baço", "Tiroglobulina",
+    "Cádmio", "Tálio", "Índice de alergia ao pólen", "Índice de alergia a poeira", "Alergia a acessorios de metal",
+    "Índice alergia marisco", "Coeficiente de hiperinsulinemia", "Índice de imunidade da pele", "Afrouxamento e queda",
+    "Edema", "Cabelo e pele", "Sistema imunologico", "Desintoxicação e metabolismo", "Sistema reprodutivo",
+    "Meridiano do Intestino Grosso Yangming da Mão", "Meridiano do Coração Shao Yin da mão",
+    "Meridiano da Bexiga Tai Yang do Pé", "Triplo Aquecedor Shao Yang da Mão", "Meridiano Governador",
+    "Meridiano Vital", "Pulso (SV)", "Saturação do oxigênio do sangue cerebrovascular (Sa)",
+    "Pressão do oxigênio do sangue cerebrovascular (PaO2)", "Colesterol total (TC)",
+    "Lipoproteína de baixa densidade (LDL-C)", "Complexo imunológico circulatório (CIC)", "Progesterona",
+    "Coeficiente de distúrbios endócrinos"
+]
+
 def extrair_parametros_valores(pdf_path):
     dados = []
+    estado = 'buscando_sistema'
     sistema_atual = None
     item_acumulado = ""
     conselhos_acumulado = ""
+    normal_min = None
+    normal_max = None
+    valor_real = None
 
     table_settings = {
-        "vertical_strategy": "lines",
-        "horizontal_strategy": "lines",
-        "snap_tolerance": 3,
-        "join_tolerance": 3,
-        "min_words_vertical": 3,
+        "vertical_strategy": "lines_strict",
+        "horizontal_strategy": "lines_strict",
+        "snap_tolerance": 5,
+        "join_tolerance": 5,
     }
 
     try:
@@ -25,98 +58,67 @@ def extrair_parametros_valores(pdf_path):
                 tables = page.extract_tables(table_settings)
                 for table in tables:
                     for row in table:
-                        # Limpa e junta células, removendo artifacts como "****"
                         row = [re.sub(r'\*+', '', cell.strip()) if cell else "" for cell in row]
-                        row_text = " ".join(row).strip()
+                        row_text = " ".join([r for r in row if r]).strip().replace(',', '.')
                         if not row_text:
                             continue
 
-                        logging.info(f"Row extraída: {row_text}")  # Depuração
+                        logging.info(f"Row extraída: {row_text}")
 
-                        # Detecta sistema: linhas sem números, com palavras chave
-                        if not re.search(r'\d', row_text) and re.search(r'(Função|Índice|Coeficiente|Sistema|Meridiano|Pulso|Cardiovascular)', row_text):
-                            if item_acumulado and conselhos_acumulado:  # Só salva se houver acumulado válido
-                                dado = _criar_dado(sistema_atual, item_acumulado, conselhos_acumulado)
-                                if dado['normal_min'] is not None and dado['valor_real'] is not None:
-                                    dados.append(dado)
-                            sistema_atual = row_text
-                            item_acumulado = ""
-                            conselhos_acumulado = ""
-                            continue
+                        # Máquina de estados
+                        if estado == 'buscando_sistema':
+                            match_sistema = get_close_matches(row_text, REFERENCIA_SISTEMAS, n=1, cutoff=0.6)
+                            if match_sistema and not re.search(r'\d', row_text):
+                                sistema_atual = match_sistema[0]
+                                estado = 'buscando_item'
+                                continue
 
-                        # Acumula para multi-linha: se não houver números, adiciona ao item ou conselhos
-                        if not re.search(r'\d', row_text):
-                            if item_acumulado:
-                                conselhos_acumulado += " " + row_text
-                            else:
-                                item_acumulado += " " + row_text
-                            continue
-
-                        # Parseia linha completa com regex flexível para item longo, intervalo, valor, conselhos
-                        match = re.match(r'(.*?)\s*(\d+[.,]?\d*)\s*-\s*(\d+[.,]?\d*)\s*(\d+[.,]?\d*)\s*(.*)', row_text.replace(',', '.'))
-                        if match:
-                            novo_item = match.group(1).strip()
-                            try:
+                        if estado in ['buscando_item', 'acumulando_conselhos']:
+                            # Regex para item completo: texto até intervalo, valor, então conselhos
+                            match = re.match(r'(.+?)\s*(\d+\.?\d*)\s*-\s*(\d+\.?\d*)\s*(\d+\.?\d*)\s*(.*)', row_text)
+                            if match:
+                                # Salva anterior se acumulado
+                                if item_acumulado:
+                                    dados.append(_criar_dado(sistema_atual, item_acumulado, conselhos_acumulado, normal_min, normal_max, valor_real))
+                                # Novo item
+                                item_acumulado = _corrigir_item(match.group(1).strip())
                                 normal_min = float(match.group(2))
                                 normal_max = float(match.group(3))
                                 valor_real = float(match.group(4))
-                            except ValueError:
-                                logging.warning(f"Row ignorada: valores inválidos em {row_text}")
+                                conselhos_acumulado = match.group(5).strip()
+                                estado = 'acumulando_conselhos'
                                 continue
+                            else:
+                                # Acumula em item ou conselhos
+                                if estado == 'buscando_item':
+                                    item_acumulado += " " + row_text
+                                else:
+                                    conselhos_acumulado += " " + row_text
 
-                            novo_conselhos = match.group(5).strip()
-
-                            # Salva acumulado anterior se existir
-                            if item_acumulado:
-                                dado = _criar_dado(sistema_atual, item_acumulado, conselhos_acumulado)
-                                if dado['normal_min'] is not None and dado['valor_real'] is not None:
-                                    dados.append(dado)
-
-                            item_acumulado = novo_item
-                            conselhos_acumulado = novo_conselhos
-                            # Salva imediatamente o novo (já que tem valores)
-                            dado = _criar_dado(sistema_atual, item_acumulado, conselhos_acumulado, normal_min, normal_max, valor_real)
-                            if dado['normal_min'] is not None and dado['valor_real'] is not None:
-                                dados.append(dado)
-                            item_acumulado = ""  # Reseta após salvar
-                            conselhos_acumulado = ""
-                        else:
-                            # Acumula em conselhos se não match
-                            conselhos_acumulado += " " + row_text
-                            logging.info(f"Acumulado em conselhos: {row_text}")
-
-                # Fallback: texto plano se não houver tabelas
+                # Fallback texto plano
                 if not tables:
-                    texto = page.extract_text()
-                    if texto:
-                        linhas = re.split(r'\n', texto)
-                        for linha in linhas:
-                            linha = linha.strip().replace(',', '.')
-                            match = re.match(r'(.*?)\s*(\d+\.?\d*)\s*-\s*(\d+\.?\d*)\s*(\d+\.?\d*)\s*(.*)', linha)
-                            if match:
-                                item = match.group(1).strip()
-                                try:
-                                    normal_min = float(match.group(2))
-                                    normal_max = float(match.group(3))
-                                    valor_real = float(match.group(4))
-                                except ValueError:
-                                    continue
-                                conselhos = match.group(5).strip()
-                                dado = _criar_dado(sistema_atual, item, conselhos, normal_min, normal_max, valor_real)
-                                if dado['normal_min'] is not None and dado['valor_real'] is not None:
-                                    dados.append(dado)
+                    texto = page.extract_text() or ""
+                    linhas = re.split(r'\n', texto)
+                    for linha in linhas:
+                        linha = linha.strip().replace(',', '.')
+                        match = re.match(r'(.+?)\s*(\d+\.?\d*)\s*-\s*(\d+\.?\d*)\s*(\d+\.?\d*)\s*(.*)', linha)
+                        if match:
+                            item = _corrigir_item(match.group(1).strip())
+                            min_val = float(match.group(2))
+                            max_val = float(match.group(3))
+                            val = float(match.group(4))
+                            cons = match.group(5).strip()
+                            dados.append(_criar_dado(sistema_atual, item, cons, min_val, max_val, val))
 
-        # Salva o último acumulado, se válido
+        # Salva último
         if item_acumulado:
-            dado = _criar_dado(sistema_atual, item_acumulado, conselhos_acumulado)
-            if dado['normal_min'] is not None and dado['valor_real'] is not None:
-                dados.append(dado)
+            dados.append(_criar_dado(sistema_atual, item_acumulado, conselhos_acumulado, normal_min, normal_max, valor_real))
 
-        # Limpa dados inválidos
-        dados = [d for d in dados if d['normal_min'] is not None and d['valor_real'] is not None]
+        # Filtro final
+        dados = [d for d in dados if d['item'] and d['normal_min'] is not None and d['valor_real'] is not None]
 
         if not dados:
-            raise ValueError("Nenhum dado parseado. Verifique o PDF.")
+            raise ValueError("Nenhum dado parseado.")
 
         logging.info(f"Extraídos {len(dados)} itens.")
         return dados
@@ -124,6 +126,11 @@ def extrair_parametros_valores(pdf_path):
     except Exception as e:
         logging.error(f"Erro: {str(e)}")
         raise
+
+def _corrigir_item(item):
+    # Corrige com matching de referência
+    match = get_close_matches(item, REFERENCIA_ITENS, n=1, cutoff=0.7)
+    return match[0] if match else item
 
 def _criar_dado(sistema, item, conselhos, min_val=None, max_val=None, valor=None):
     if min_val is not None and max_val is not None and min_val > max_val:
@@ -137,11 +144,11 @@ def _criar_dado(sistema, item, conselhos, min_val=None, max_val=None, valor=None
         'conselhos': conselhos
     }
 
-# validar_parametros e gerar_relatorio permanecem iguais ao código anterior
+# validar_parametros e gerar_relatorio (com sistema no item)
 def validar_parametros(dados):
     anomalias = []
     for d in dados:
-        if 'valor_real' not in d or d['valor_real'] is None:
+        if d['valor_real'] is None:
             continue
         valor = d['valor_real']
         min_val = d['normal_min']
