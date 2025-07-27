@@ -23,80 +23,88 @@ def _num(txt: str):
 # ╰──────────────────────────────────────────────────────╯
 
 
+def _row_numbers(texto: str):
+    "Retorna lista de todos os floats contidos na string."
+    return [_num(x) for x in re.findall(r"[-+]?\d+(?:[.,]\d+)?", texto)]
+
+def _explode_nome(raw_nome: str):
+    """
+    Se o nome contiver vários parâmetros colados,
+    tenta separá-los por ':'  ou ') '  ou  '  '  (dois espaços).
+    """
+    if ":" in raw_nome:
+        partes = [p.strip(" -") for p in raw_nome.split(":") if p.strip()]
+    elif ") " in raw_nome:
+        partes = [p.strip(" -") for p in raw_nome.split(") ") if p.strip()]
+        partes = [p + (")" if not p.endswith(")") else "") for p in partes]
+    else:
+        partes = [raw_nome]
+    # remove duplicidades ocasionais
+    return [p for i, p in enumerate(partes) if p and p not in partes[:i]]
+
 def extrair_parametros_valores(pdf_path: str) -> dict:
     """
-    Versão 4  –  pega pedaços ANTES e DEPOIS da linha com números.
-    Resolve casos como:
-       • “Viscosidade do”   (linha com números)
-         “sangue”           (linha logo a seguir, sem números)
+    Versão 5 – robusta para:
+        • Quebra antes + depois
+        • Linha-núcleo com números em QUALQUER coluna
+        • Vários parâmetros colados na mesma célula
     """
     resultado = {}
-
-    # Configuração da extração de tabelas
     cfg = dict(
         vertical_strategy="lines",
         horizontal_strategy="lines",
         intersection_y_tolerance=10,
     )
 
-    # Primeiro, coletamos todas as linhas numa lista simples
-    linhas = []  # cada item -> (nome, faixa, valor, tem_numeros)
+    # 1) Carrega todas as linhas da(s) tabela(s)
+    linhas = []
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            for tabela in page.extract_tables(cfg):
-                for row in tabela:
+            for tbl in page.extract_tables(cfg):
+                for row in tbl:
                     if len(row) < 4:
                         continue
-                    nome  = _clean(row[1])
-                    faixa = _clean(row[2])
-                    valor = _clean(row[3])
+                    col2, col3, col4 = map(_clean, row[1:4])
+                    linha_txt = " ".join([col2, col3, col4])
+                    nums = _row_numbers(linha_txt)
+                    linhas.append(
+                        dict(nome=col2, faixa=col3, valor=col4, nums=nums)
+                    )
 
-                    tem_faixa = len(_list_numeros(faixa)) >= 2
-                    tem_valor = len(_list_numeros(valor)) == 1
-                    tem_numeros = tem_faixa and tem_valor
-
-                    linhas.append((nome, faixa, valor, tem_numeros))
-
-    # Agora processamos com ponteiro 'i'
+    # 2) Percorre com índice, acumulando partes de nome
+    buffer = []
     i = 0
-    buffer_antes = []  # pedaços de nome antes da linha-núcleo
-
     while i < len(linhas):
-        nome, faixa, valor, is_num = linhas[i]
+        ln = linhas[i]
 
-        if not is_num:
-            # Ainda não chegamos à linha-núcleo → acumulo no buffer
-            if nome:
-                buffer_antes.append(nome)
+        if len(ln["nums"]) < 3:
+            # ainda não chegou a uma linha com 3 números ⇒ só acumula nome
+            if ln["nome"]:
+                buffer.append(ln["nome"])
             i += 1
             continue
 
-        # Linha-núcleo encontrada  (tem faixa+valor)
-        # 1) junta os pedaços anteriores + próprio nome
-        partes_nome = buffer_antes + ([nome] if nome else [])
-        buffer_antes = []  # zera para o próximo parâmetro
+        # Linha-núcleo: tem pelo menos 3 números
+        min_, max_, val = ln["nums"][:3]
 
-        minimo, maximo = map(_num, _list_numeros(faixa)[:2])
-        valor_num      = _num(_list_numeros(valor)[0])
+        # Nome completo = buffer antes + nome desta linha
+        nome_base = " ".join(buffer + [ln["nome"]]).strip()
+        buffer = []  # limpa
 
-        # 2) olha as linhas logo DEPOIS, enquanto não aparecer nova linha-núcleo
+        # Também pegar pedaços DEPOIS desta linha até nova linha-núcleo
         j = i + 1
-        while j < len(linhas) and not linhas[j][3]:
-            nome_pos, _, _, _ = linhas[j]
-            if nome_pos:
-                partes_nome.append(nome_pos)
+        pos_pieces = []
+        while j < len(linhas) and len(linhas[j]["nums"]) < 3:
+            if linhas[j]["nome"]:
+                pos_pieces.append(linhas[j]["nome"])
             j += 1
+        nome_todo = " ".join([nome_base] + pos_pieces).strip()
 
-        nome_completo = " ".join(partes_nome).strip()
-        if nome_completo and minimo is not None and maximo is not None:
-            resultado[nome_completo] = {
-                "min": minimo,
-                "max": maximo,
-                "valor": valor_num,
-            }
+        # Divide caso contenha vários parâmetros colados
+        for nome in _explode_nome(nome_todo):
+            resultado[nome] = {"min": min_, "max": max_, "valor": val}
 
-        # Continua a partir da próxima linha ainda não processada
-        i = j
+        i = j  # avança
 
     return resultado
 
