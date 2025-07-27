@@ -10,7 +10,7 @@ def _clean(txt: str) -> str:
     return (
         txt.replace("\n", " ").replace("\r", " ")
         .replace(",", ".").replace("’", "").replace("'", "")
-        .replace("–", "-").replace("   ", " ").strip()
+        .replace("–", "-").replace("  ", " ").replace("--", "-").strip()
     )
 
 def _list_numeros(txt: str):
@@ -31,13 +31,13 @@ def _row_numbers(texto: str):
 def _explode_nome(raw_nome: str):
     """
     Se o nome contiver vários parâmetros colados,
-    tenta separá-los por ':'  ou ') '  ou por inícios de maiúsculas.
+    tenta separá-los por ':'  ou ') '  ou '  ' (dois espaços) ou 'α-'.
     """
     raw_nome = _clean(raw_nome)
     if not raw_nome:
         return []
 
-    # Divisão original por : ou ) 
+    # Divisão por : ou ) 
     if ":" in raw_nome:
         partes = [p.strip(" -") for p in raw_nome.split(":") if p.strip()]
     elif ") " in raw_nome:
@@ -46,20 +46,21 @@ def _explode_nome(raw_nome: str):
     else:
         partes = [raw_nome]
 
-    # Para cada parte, tenta dividir ainda mais por frases iniciando com maiúscula
-    upper = r'[A-ZÁÀÂÃÉÈÊÍÓÔÕÚÇ]'  # Maiúsculas comuns em português
-    pattern = fr'.*?(?=\s{upper}|$)'
+    # Divisão adicional por dois espaços ou 'α-' se a parte for longa
     exploded = []
     for p in partes:
-        subs = re.findall(pattern, p)
-        subs = [sub.strip() for sub in subs if sub.strip()]
-        if subs:
+        if len(p) > 50 or 'α-' in p:  # Apenas para strings longas ou com 'α-'
+            subs = re.split(r'\s{2,}|α-', p)
+            subs = [sub.strip() for sub in subs if sub.strip()]
             exploded.extend(subs)
         else:
             exploded.append(p)
 
-    # Remove duplicidades
-    return [p for i, p in enumerate(exploded) if p and p not in exploded[:i]]
+    # Remove duplicidades e itens indesejados (como cabeçalhos)
+    ignore = {'ITEM', 'DE', 'TESTE'}  # Adicione mais se necessário, ex.: 'Sistema'
+    exploded = [p for i, p in enumerate(exploded) if p and p not in exploded[:i] and p not in ignore and len(p) >= 3]
+
+    return exploded
 
 def _is_param_row(col3: str, col4: str) -> bool:
     """Linha-parâmetro = 3ª coluna (mín-máx) tem ≥2 números  E  4ª coluna tem 1 número."""
@@ -68,10 +69,7 @@ def _is_param_row(col3: str, col4: str) -> bool:
 
 def extrair_parametros_valores(pdf_path: str) -> dict:
     """
-    Versão 8 – definitiva
-    • identifica a linha-parâmetro como acima
-    • junta TODAS as linhas sem números entre esta e a próxima linha-parâmetro
-    • mantém as partes antes (caso ‘Viscosidade do’   +   linha-parâmetro)
+    Versão 9 – corrigida para divisão menos agressiva e remoção de cabeçalhos.
     """
     resultado = {}
 
@@ -123,7 +121,7 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
 
         nome_completo = " ".join(partes_nome)
 
-        # Se vieram 2+ itens na mesma célula, divide por ':'  ') '  '  '
+        # Se vieram 2+ itens na mesma célula, divide
         for n in _explode_nome(nome_completo):
             resultado[n] = {"min": minimo, "max": maximo, "valor": valor_medido}
 
