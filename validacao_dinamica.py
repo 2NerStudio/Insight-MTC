@@ -91,15 +91,17 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
     if not linhas:
         raise ValueError("Nenhuma linha de tabela encontrada no PDF.")
 
-    i = 0
     buffer_antes = []
     headers_ignore = {"ITEM", "DE", "TESTE", "ITEM DE TESTE"}
-    max_iterations = len(linhas) * 2  # Safeguard contra loop infinito
+    max_iterations = len(linhas) * 2
     iteration_count = 0
 
-    while i < len(linhas):
+    # Reescrito como for para evitar infinitos (avança i sempre)
+    i = 0
+    while i < len(linhas):  # Mantive while, mas com incremento garantido abaixo
         iteration_count += 1
         if iteration_count > max_iterations:
+            print("LOG ERROR: Loop excedeu limite – PDF malformado.")
             raise RuntimeError("Loop infinito detectado – PDF malformado.")
 
         nome, faixa, valor = linhas[i]
@@ -107,12 +109,12 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
         if not _is_param_row(faixa, valor):
             if nome and len(nome) >= 5 and not any(h in nome for h in headers_ignore) and nome not in headers_ignore:
                 buffer_antes.append(nome.strip())
-            i += 1
+            i += 1  # Incremento garantido
             continue
 
         numeros_faixa = _list_numeros(faixa)
         if len(numeros_faixa) < 2:
-            i += 1
+            i += 1  # Incremento garantido
             continue
         minimo, maximo = map(_num, numeros_faixa[:2])
         valor_medido = _num(_list_numeros(valor)[0]) if _list_numeros(valor) else None
@@ -121,7 +123,9 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
         buffer_antes = []
 
         j = i + 1
-        while j < len(linhas) and not _is_param_row(linhas[j][1], linhas[j][2]):
+        sub_iteration = 0
+        while j < len(linhas) and not _is_param_row(linhas[j][1], linhas[j][2]) and sub_iteration < 1000:  # Limite sub-loop
+            sub_iteration += 1
             nm_next = linhas[j][0]
             if nm_next and len(nm_next) >= 5 and not any(h in nm_next for h in headers_ignore):
                 partes_nome.append(nm_next.strip())
@@ -130,8 +134,10 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
         nome_completo = " ".join(partes_nome).strip()
 
         if not nome_completo or all(part in headers_ignore for part in nome_completo.split()):
-            i = j
+            i = j  # Avança para j
             continue
+
+        print(f"LOG: Processando nome: {nome_completo}")  # Logging para rastrear
 
         nomes_divididos = _explode_nome(nome_completo)
         for n in nomes_divididos:
@@ -139,7 +145,7 @@ def extrair_parametros_valores(pdf_path: str) -> dict:
             if key not in resultado:
                 resultado[key] = {"min": minimo, "max": maximo, "valor": valor_medido}
 
-        i = j
+        i = j  # Avança para j sempre
 
     return {k[0]: v for k, v in resultado.items()}
 
