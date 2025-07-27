@@ -5,122 +5,93 @@ import sys
 
 # ╭──────────────────────── util ────────────────────────╮
 def _clean(txt: str) -> str:
+    """Limpa a string, substituindo quebras de linha e vírgulas por pontos."""
     if not txt:
         return ""
-    return (
-        txt.replace("\n", " ").replace("\r", " ")
-        .replace(",", ".").replace("’", "").replace("'", "").strip()
-    )
+    return txt.replace("\n", " ").replace("\r", " ").replace(",", ".").strip()
 
 def _list_numeros(txt: str):
-    return re.findall(r"[-+]?\d+(?:[.,]\d+)?", txt or "")
+    """Extrai todos os números (inteiros ou decimais) de uma string."""
+    return re.findall(r"[-+]?\d+(?:\.\d+)?", txt or "")
 
 def _num(txt: str):
+    """Converte uma string para float, lidando com possíveis erros."""
     try:
         return float(txt.replace(",", "."))
-    except Exception:
+    except (ValueError, TypeError):
         return None
 # ╰──────────────────────────────────────────────────────╯
 
-
-def _row_numbers(texto: str):
-    "Retorna lista de todos os floats contidos na string."
-    return [_num(x) for x in re.findall(r"[-+]?\d+(?:[.,]\d+)?", texto)]
-
-def _explode_nome(raw_nome: str):
-    """
-    Se o nome contiver vários parâmetros colados,
-    tenta separá-los por ':'  ou ') '  ou  '  '  (dois espaços).
-    """
-    if ":" in raw_nome:
-        partes = [p.strip(" -") for p in raw_nome.split(":") if p.strip()]
-    elif ") " in raw_nome:
-        partes = [p.strip(" -") for p in raw_nome.split(") ") if p.strip()]
-        partes = [p + (")" if not p.endswith(")") else "") for p in partes]
-    else:
-        partes = [raw_nome]
-    # remove duplicidades ocasionais
-    return [p for i, p in enumerate(partes) if p and p not in partes[:i]]
-
 def _is_param_row(col3: str, col4: str) -> bool:
-    """Linha-parâmetro = 3ª coluna (mín-máx) tem ≥2 números  E  4ª coluna tem 1 número."""
+    """
+    Verifica se uma linha é uma linha de parâmetro.
+    Regra: A 3ª coluna (intervalo) deve ter 2 números (mín-máx) e
+           a 4ª coluna (valor) deve ter 1 número.
+    """
     return len(_list_numeros(col3)) >= 2 and len(_list_numeros(col4)) == 1
-
 
 def extrair_parametros_valores(pdf_path: str) -> dict:
     """
-    Versão 8 – definitiva
-    • identifica a linha-parâmetro como acima
-    • junta TODAS as linhas sem números entre esta e a próxima linha-parâmetro
-    • mantém as partes antes (caso ‘Viscosidade do’   +   linha-parâmetro)
+    Versão corrigida: Extrai parâmetros do PDF de forma precisa.
+    Itera por todas as linhas da tabela e processa apenas aquelas que
+    correspondem ao formato de um item de teste com valores, ignorando
+    cabeçalhos de categoria e outras linhas.
     """
     resultado = {}
-
     cfg = dict(
         vertical_strategy="lines",
         horizontal_strategy="lines",
         intersection_y_tolerance=10,
     )
 
-    # ── carrega todas as linhas da(s) tabelas
-    linhas = []
     with pdfplumber.open(pdf_path) as pdf:
         for pg in pdf.pages:
-            for tb in pg.extract_tables(cfg):
+            # Tenta extrair tabelas. Se falhar, continua para a próxima página.
+            tabelas = pg.extract_tables(cfg)
+            if not tabelas:
+                continue
+
+            for tb in tabelas:
                 for row in tb:
+                    # Garante que a linha tenha colunas suficientes
                     if len(row) < 4:
                         continue
-                    c2, c3, c4 = map(_clean, row[1:4])
-                    linhas.append((c2, c3, c4))  # (nome, faixa, valor)
 
-    # ── percorre com índice i
-    i = 0
-    buffer_antes = []          # pedaços que vêm antes da 1ª linha-parâmetro
-    while i < len(linhas):
-        nome, faixa, valor = linhas[i]
+                    # Limpa as colunas relevantes: Item, Intervalo, Valor
+                    nome_item, faixa, valor = map(_clean, (row[1], row[2], row[3]))
 
-        # Se ainda não é linha-parâmetro, acumula no buffer e segue
-        if not _is_param_row(faixa, valor):
-            if nome:
-                buffer_antes.append(nome.strip())
-            i += 1
-            continue
+                    # Processa a linha APENAS se for uma linha de parâmetro válida
+                    if nome_item and _is_param_row(faixa, valor):
+                        numeros_faixa = _list_numeros(faixa)
+                        numero_valor = _list_numeros(valor)
 
-        # —— encontramos a linha-parâmetro ——————————————
-        minimo, maximo = map(_num, _list_numeros(faixa)[:2])
-        valor_medido   = _num(_list_numeros(valor)[0])
+                        minimo = _num(numeros_faixa[0])
+                        maximo = _num(numeros_faixa[1])
+                        valor_medido = _num(numero_valor[0])
 
-        # Nome começa com o que estava antes + próprio nome da linha
-        partes_nome = buffer_antes + ([nome.strip()] if nome else [])
-        buffer_antes = []  # zera para próximo ciclo
-
-        # Junta TODAS as linhas seguintes que NÃO sejam parâmetro
-        j = i + 1
-        while j < len(linhas) and not _is_param_row(linhas[j][1], linhas[j][2]):
-            nm_next = linhas[j][0]
-            if nm_next:
-                partes_nome.append(nm_next.strip())
-            j += 1
-
-        nome_completo = " ".join(partes_nome)
-
-        # Se vieram 2+ itens na mesma célula, divide por ':'  ') '  '  '
-        for n in _explode_nome(nome_completo):
-            resultado[n] = {"min": minimo, "max": maximo, "valor": valor_medido}
-
-        i = j  # continua a partir da próxima linha-parâmetro
-
+                        # Adiciona ao resultado se todos os valores forem válidos
+                        if all(v is not None for v in [minimo, maximo, valor_medido]):
+                            resultado[nome_item] = {
+                                "min": minimo,
+                                "max": maximo,
+                                "valor": valor_medido
+                            }
     return resultado
 
-
 def validar_parametros(dados: dict):
-    anom = []
+    """
+    Compara o valor medido com o intervalo de normalidade e retorna uma lista de anomalias.
+    """
+    anomalias = []
     for item, d in dados.items():
         v, mn, mx = d["valor"], d["min"], d["max"]
+
+        # Pula itens com dados inválidos
         if v is None or mn is None or mx is None:
             continue
+
         if not (mn <= v <= mx):
-            anom.append(
+            anomalias.append(
                 dict(
                     item=item,
                     valor_real=v,
@@ -129,38 +100,41 @@ def validar_parametros(dados: dict):
                     normal_max=mx,
                 )
             )
-    return anom
-
+    return anomalias
 
 def _to_docx(texto: str, path: str):
+    """Cria um documento .docx a partir de um texto."""
     doc = Document()
     for linha in texto.split("\n"):
         doc.add_paragraph(linha)
     doc.save(path)
 
-
 def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomalias.docx"):
+    """
+    Gera um relatório final em formato .docx com as anomalias encontradas.
+    """
     try:
         dados = extrair_parametros_valores(pdf_path)
         if not dados:
-            raise ValueError("Não foi possível extrair parâmetros do PDF.")
+            # Adiciona uma verificação para o caso de nenhum parâmetro ser extraído
+            raise ValueError("Não foi possível extrair parâmetros válidos do arquivo PDF.")
 
-        anom = validar_parametros(dados)
+        anomalias = validar_parametros(dados)
 
         linhas = [
             "Relatório de Anomalias",
             f"Terapeuta: {terapeuta}   Registro: {registro}",
             "",
         ]
-        if not anom:
-            linhas.append("🎉 Todos os parâmetros dentro da normalidade.")
+        if not anomalias:
+            linhas.append("🎉 Todos os parâmetros encontrados estão dentro do intervalo de normalidade.")
         else:
-            linhas.append(f"⚠️ {len(anom)} anomalias encontradas:")
-            for a in anom:
+            linhas.append(f"⚠️ {len(anomalias)} anomalias encontradas:")
+            for a in sorted(anomalias, key=lambda x: x['item']): # Ordena para consistência
                 linhas.append(
                     f"• {a['item']}: {a['valor_real']:.3f} "
                     f"({a['status']} do normal; "
-                    f"Normal: {a['normal_min']}–{a['normal_max']})"
+                    f"Normal: {a['normal_min']:.3f}–{a['normal_max']:.3f})"
                 )
 
         _to_docx("\n".join(linhas), output_path)
@@ -169,10 +143,27 @@ def gerar_relatorio(pdf_path, terapeuta, registro, output_path="relatorio_anomal
         return False, str(e)
 
 
-# CLI (opcional)
+# Bloco para execução via linha de comando (CLI), mantido para testes
 if __name__ == "__main__":
     if len(sys.argv) != 4:
-        print("Uso: python validacao_dinamica.py <arquivo.pdf> \"Terapeuta\" \"Registro\"")
+        print("Uso: python validacao_dinamica.py <arquivo.pdf> \"Nome do Terapeuta\" \"Registro Profissional\"")
         sys.exit(1)
-    ok, _ = gerar_relatorio(sys.argv[1], sys.argv[2], sys.argv[3])
-    sys.exit(0 if ok else 1)
+
+    pdf_file, terapeuta_nome, terapeuta_reg = sys.argv[1], sys.argv[2], sys.argv[3]
+    dados_extraidos = extrair_parametros_valores(pdf_file)
+    anomalias_encontradas = validar_parametros(dados_extraidos)
+
+    print(f"--- {len(anomalias_encontradas)} Anomalias Encontradas ---")
+    for anomalia in sorted(anomalias_encontradas, key=lambda x: x['item']):
+        print(
+            f"- {anomalia['item']}: {anomalia['valor_real']} "
+            f"({anomalia['status']} do normal; Normal: {anomalia['normal_min']}–{anomalia['normal_max']})"
+        )
+
+    ok, path_or_err = gerar_relatorio(pdf_file, terapeuta_nome, terapeuta_reg, "relatorio_cli.docx")
+    if ok:
+        print(f"\nRelatório salvo em: {path_or_err}")
+        sys.exit(0)
+    else:
+        print(f"\nErro ao gerar relatório: {path_or_err}")
+        sys.exit(1)
