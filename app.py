@@ -2,6 +2,7 @@ import streamlit as st
 import tempfile
 import os
 import subprocess
+import time  # Para timeout global
 try:
     from docx2pdf import convert  # Alternativa para conversão (pip install docx2pdf)
 except ImportError:
@@ -68,13 +69,22 @@ if st.button("⚙️ Validar Parâmetros"):
         with st.status("🔍 Processando...", expanded=True) as status:
             tmp_input = None
             pdf_path = None
+            start_time = time.time()  # Início do timer
             try:
+                if time.time() - start_time > 60:
+                    raise TimeoutError("Processamento demorou demais – tente um arquivo menor.")
+
+                print("LOG: Iniciando salvamento de arquivo...")  # Logging para nuvem
                 status.update(label="Salvando arquivo temporário...")
                 ext = os.path.splitext(arquivo.name)[1].lower()
                 tmp_input = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
                 tmp_input.write(arquivo.read())
                 tmp_input.close()
 
+                if time.time() - start_time > 60:
+                    raise TimeoutError("Processamento demorou demais – tente um arquivo menor.")
+
+                print("LOG: Iniciando conversão...")  # Logging
                 status.update(label="Convertendo DOCX para PDF se necessário...")
                 if ext == ".docx":
                     tmp_pdf = tmp_input.name.replace(".docx", ".pdf")
@@ -83,7 +93,7 @@ if st.button("⚙️ Validar Parâmetros"):
                     else:
                         subprocess.run(
                             ["libreoffice", "--headless", "--convert-to", "pdf", tmp_input.name, "--outdir", os.path.dirname(tmp_input.name)],
-                            check=True, timeout=30  # Timeout para conversão
+                            check=True, timeout=30
                         )
                     pdf_path = tmp_pdf
                     if not os.path.exists(pdf_path):
@@ -91,14 +101,26 @@ if st.button("⚙️ Validar Parâmetros"):
                 else:
                     pdf_path = tmp_input.name
 
+                if time.time() - start_time > 60:
+                    raise TimeoutError("Processamento demorou demais – tente um arquivo menor.")
+
+                print("LOG: Iniciando extração...")  # Logging
                 status.update(label="Extraindo parâmetros do PDF...")
                 dados = extrair_parametros_valores(pdf_path)
                 if not dados:
                     raise ValueError("Nenhum parâmetro extraído. Verifique se o PDF contém tabelas válidas.")
 
+                if time.time() - start_time > 60:
+                    raise TimeoutError("Processamento demorou demais – tente um arquivo menor.")
+
+                print("LOG: Iniciando validação...")  # Logging
                 status.update(label="Validando parâmetros...")
                 anomalias = validar_parametros(dados)
 
+                if time.time() - start_time > 60:
+                    raise TimeoutError("Processamento demorou demais – tente um arquivo menor.")
+
+                print("LOG: Gerando relatório...")  # Logging
                 status.update(label="Gerando relatório...")
                 output_path = os.path.join(tempfile.gettempdir(), "relatorio_anomalias.docx")
                 ok, msg = gerar_relatorio(pdf_path, nome_terapeuta, registro_terapeuta, output_path)
@@ -106,6 +128,7 @@ if st.button("⚙️ Validar Parâmetros"):
                     raise ValueError(f"Erro ao gerar relatório: {msg}")
 
                 status.update(label="Finalizado!", state="complete")
+                print("LOG: Processamento concluído com sucesso.")  # Logging
 
                 if not anomalias:
                     st.success("🎉 Todos os parâmetros estão dentro do intervalo normal.")
@@ -125,6 +148,7 @@ if st.button("⚙️ Validar Parâmetros"):
             except Exception as e:
                 status.update(label=f"Erro: {str(e)}", state="error")
                 st.error(f"❌ Erro ao processar: {str(e)}")
+                print(f"LOG ERROR: {str(e)}")  # Logging para nuvem
             finally:
                 if tmp_input and os.path.exists(tmp_input.name):
                     os.unlink(tmp_input.name)
