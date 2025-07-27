@@ -19,52 +19,88 @@ def extrair_parametros_valores(pdf_path):
 
         # Normaliza texto: remove quebras extras, substitui vírgulas por pontos para floats
         texto_completo = re.sub(r'\s+', ' ', texto_completo).replace(',', '.')
-        
+        logging.info(f"Texto extraído (primeiros 500 chars): {texto_completo[:500]}")  # Para depuração
+
         dados = []
         sistema_atual = None
+        item_atual = None
+        conselhos_acumulados = ""
         linhas = texto_completo.splitlines()
-        
+
         for linha in linhas:
             linha = linha.strip()
             if not linha:
                 continue
-            
-            # Detecta sistema (cabeçalhos como "Cardiovascular e Cerebrovascular")
-            if re.match(r'^[A-Z][a-z]+\s', linha) and 'Função' in linha or 'Índice' in linha or 'Coeficiente' in linha:
+
+            # Detecta sistema (linhas que parecem cabeçalhos, ex: "Cardiovascular e Cerebrovascular" ou "Função do Fígado")
+            if re.search(r'(Função|Índice|Coeficiente|Sistema|Meridiano|Pulso)', linha) and not re.search(r'\d', linha[:20]):
+                if sistema_atual and item_atual and conselhos_acumulados:
+                    # Salva item anterior antes de mudar sistema
+                    dados.append({
+                        'sistema': sistema_atual,
+                        'item': item_atual,
+                        'normal_min': normal_min,
+                        'normal_max': normal_max,
+                        'valor_real': valor_real,
+                        'conselhos': conselhos_acumulados.strip()
+                    })
                 sistema_atual = linha
+                item_atual = None
+                conselhos_acumulados = ""
                 continue
-            
-            # Padrão para item: "Item intervalo_min - intervalo_max valor_real Conselhos..."
-            match = re.match(r'(.+?)\s+(\d+\.?\d*)\s*-\s*(\d+\.?\d*)\s+(\d+\.?\d*)\s+(.*)', linha)
+
+            # Detecta item: padrão como "Item min - max valor" seguido de conselhos
+            match = re.match(r'(.+?)\s*(\d+\.?\d*)\s*-\s*(\d+\.?\d*)\s*(\d+\.?\d*)\s*(.*)', linha)
             if match:
-                item = match.group(1).strip()
+                if item_atual and conselhos_acumulados:
+                    # Salva item anterior
+                    dados.append({
+                        'sistema': sistema_atual,
+                        'item': item_atual,
+                        'normal_min': normal_min,
+                        'normal_max': normal_max,
+                        'valor_real': valor_real,
+                        'conselhos': conselhos_acumulados.strip()
+                    })
+
+                item_atual = match.group(1).strip()
                 normal_min = float(match.group(2))
                 normal_max = float(match.group(3))
                 valor_real = float(match.group(4))
-                conselhos = match.group(5).strip()
-                
-                # Corrige se min > max (inverte)
+                conselhos_acumulados = match.group(5).strip()
+
+                # Corrige se min > max
                 if normal_min > normal_max:
                     normal_min, normal_max = normal_max, normal_min
-                
-                dados.append({
-                    'sistema': sistema_atual,
-                    'item': item,
-                    'normal_min': normal_min,
-                    'normal_max': normal_max,
-                    'valor_real': valor_real,
-                    'conselhos': conselhos
-                })
-        
+                continue
+
+            # Acumula conselhos para linhas subsequentes
+            if item_atual:
+                conselhos_acumulados += " " + linha
+
+        # Salva o último item
+        if sistema_atual and item_atual and conselhos_acumulados:
+            dados.append({
+                'sistema': sistema_atual,
+                'item': item_atual,
+                'normal_min': normal_min,
+                'normal_max': normal_max,
+                'valor_real': valor_real,
+                'conselhos': conselhos_acumulados.strip()
+            })
+
         if not dados:
-            raise ValueError("Nenhum dado parseado do PDF. Verifique o formato.")
-        
+            raise ValueError("Nenhum dado parseado do PDF. Verifique se o texto é extraível e o formato da tabela. Tente depurar o texto extraído.")
+
         logging.info(f"Extraídos {len(dados)} itens do PDF.")
         return dados
     
     except Exception as e:
         logging.error(f"Erro na extração: {str(e)}")
         raise
+
+# As funções validar_parametros e gerar_relatorio permanecem iguais ao código anterior
+# (copie-as do meu response anterior para completar o arquivo, ou mantenha se já estiverem lá)
 
 def validar_parametros(dados):
     """
@@ -73,7 +109,7 @@ def validar_parametros(dados):
     """
     anomalias = []
     for d in dados:
-        if not isinstance(d['valor_real'], (int, float)) or not isinstance(d['normal_min'], (int, float)) or not isinstance(d['normal_max'], (int, float)):
+        if not isinstance(d.get('valor_real'), (int, float)) or not isinstance(d.get('normal_min'), (int, float)) or not isinstance(d.get('normal_max'), (int, float)):
             continue  # Ignora inválidos
         
         if d['valor_real'] < d['normal_min']:
@@ -126,7 +162,7 @@ def gerar_relatorio(pdf_path, nome_terapeuta, registro_terapeuta, output_path):
         doc.add_heading('Dados Extraídos Completos', level=1)
         for d in dados:
             doc.add_paragraph(
-                f"Sistema: {d['sistema']}\nItem: {d['item']}\nNormal: {d['normal_min']}–{d['normal_max']}\nValor Real: {d['valor_real']}\nConselhos: {d['conselhos']}\n",
+                f"Sistema: {d.get('sistema', 'N/A')}\nItem: {d.get('item', 'N/A')}\nNormal: {d.get('normal_min', 'N/A')}–{d.get('normal_max', 'N/A')}\nValor Real: {d.get('valor_real', 'N/A')}\nConselhos: {d.get('conselhos', 'N/A')}\n",
                 style='Normal'
             )
         
