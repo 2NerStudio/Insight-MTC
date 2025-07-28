@@ -72,7 +72,7 @@ if not st.session_state.autenticado:
         if submit:
             if usuarios_autorizados.get(usuario) == senha:
                 st.session_state.autenticado = True
-                st.experimental_rerun()
+                st.rerun()  # Alterado aqui: use st.rerun() em vez de experimental_rerun
             else:
                 st.error("❌ Usuário ou senha inválidos.")
     st.stop()
@@ -88,7 +88,7 @@ with st.sidebar:
     st.caption("Bem-vindo ao MTC Insight Pro")
     if st.button("🚪 Sair", help="Clique para logout"):
         st.session_state.autenticado = False
-        st.experimental_rerun()
+        st.rerun()  # Alterado aqui: use st.rerun() em vez de experimental_rerun
     st.divider()
     with st.expander("ℹ️ Instruções Rápidas"):
         st.markdown("""
