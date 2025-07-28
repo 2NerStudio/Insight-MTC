@@ -1,193 +1,195 @@
 import re
-import logging
 import pdfplumber
 from docx import Document
-from difflib import get_close_matches
-from pdf2image import convert_from_path
-import pytesseract
+import sys
 
-# Configure o caminho do Tesseract (ajuste para o seu sistema)
-pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'  # Exemplo para Linux/Mac; para Windows: r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# ╭────────────── utilidades ──────────────╮
+def _clean(txt: str) -> str:
+    """Remove \n, vírgulas, aspas esquisitas, etc."""
+    if not txt:
+        return ""
+    return (
+        txt.replace("\n", " ")
+        .replace("\r", " ")
+        .replace(",", ".")
+        .replace("’", "")
+        .replace("'", "")
+        .strip()
+    )
 
-logging.basicConfig(level=logging.INFO)
+def _list_numeros(txt: str):
+    return re.findall(r"[-+]?\d+(?:[.,]\d+)?", txt or "")
 
-# Listas de referência expandidas para matching (baseadas na sua tabela original)
-REFERENCIA_SISTEMAS = [
-    "Cardiovascular e Cerebrovascular", "Função Gastrointestinal", "Função do Fígado",
-    "Grande Função do Intestino", "Função da Vesícula Biliar", "Função Pancreática",
-    "Função Renal", "Função Pulmonar", "Sistema Nervoso", "Densidade Mineral Óssea",
-    "Índice de Crescimento Ósseo", "Minerais", "Vitaminas", "Aminoácidos", "Coenzima",
-    "Ácido Graxo", "Sistema Endócrino", "Sistema Imunológico", "Tiroide", "Metais Pesados",
-    "Alérgenos", "Obesidade", "Pele", "Olhos", "Colágeno", "Acupuntura", "Pulso do Coração e Cerebro",
-    "Lipidos Sangue", "Ginecologia", "Seios", "Sistema reprodutivo", "Desintoxicação e metabolismo",
-    "Sistema imunologico", "Cabelo e pele"
-]
+def _num(txt: str):
+    try:
+        return float(txt.replace(",", "."))
+    except Exception:
+        return None
+# ╰────────────────────────────────────────╯
 
-REFERENCIA_ITENS = [
-    "Viscosidade do sangue", "Elasticidade dos vasos sanguíneos do cérebro", "Coeficiente de secreção de pepsina",
-    "Metabolismo de proteínas", "Coeficiente de absorção do cólon", "Globulina do soro sanguíneo (A/G)",
-    "Ácido biliar total do soro sanguíneo (TBA)", "Insulina", "Urobilinogênio", "Nitrogênio uréico",
-    "Atividade pulmonar VC", "Resistência das vias aéreas RAM", "Condição das funções neurológicas",
-    "Fornecimento de sangue ao cérebro", "Coeficiente de oesteoclastos", "Grau de hiperplasia óssea",
-    "Linha epifisária", "Níquel", "Flúor", "Vitamina B6", "Vitamina B12", "Vitamina K", "Treonina",
-    "Isoleucina", "Arginina", "Ácido pantotênico", "α-Ácido linolênico", "Índice de secreção da pituitária",
-    "Índice do baço", "Tiroglobulina", "Cádmio", "Tálio", "Índice de alergia ao pólen",
-    "Índice de alergia a poeira", "Alergia a acessorios de metal", "Índice alergia marisco",
-    "Coeficiente de hiperinsulinemia", "Índice de imunidade da pele", "Afrouxamento e queda", "Edema",
-    "Cabelo e pele", "Sistema imunologico", "Desintoxicação e metabolismo", "Sistema reprodutivo",
-    "Meridiano do Intestino Grosso Yangming da Mão", "Meridiano do Coração Shao Yin da mão",
-    "Meridiano da Bexiga Tai Yang do Pé", "Triplo Aquecedor Shao Yang da Mão", "Meridiano Governador",
-    "Meridiano Vital", "Pulso (SV)", "Saturação do oxigênio do sangue cerebrovascular (Sa)",
-    "Pressão do oxigênio do sangue cerebrovascular (PaO2)", "Colesterol total (TC)",
-    "Lipoproteína de baixa densidade (LDL-C)", "Complexo imunológico circulatório (CIC)", "Progesterona",
-    "Coeficiente de distúrbios endócrinos"
-]
 
-def extrair_parametros_valores(pdf_path):
-    # Passo 1: Extrai texto completo (tenta texto nativo, fallback para OCR se vazio)
-    texto_completo = ""
+# ── helpers para a V8 ─────────────────────────────────
+def _is_param_row(col3: str, col4: str) -> bool:
+    """
+    Linha-parâmetro ⇢ 3ª coluna traz ≥2 números (mín–máx)
+                       4ª coluna traz 1 número  (valor medido)
+    """
+    return len(_list_numeros(col3)) >= 2 and len(_list_numeros(col4)) == 1
+
+
+def _explode_nome(raw_nome: str):
+    """
+    Divide quando vários parâmetros vêm colados na mesma célula.
+    Usa 3 heurísticas (:   )␠   duplo espaço).
+    """
+    if ":" in raw_nome:
+        partes = [p.strip(" -") for p in raw_nome.split(":") if p.strip()]
+    elif ") " in raw_nome:
+        partes = [p.strip(" -") for p in raw_nome.split(") ") if p.strip()]
+        partes = [p + (")" if not p.endswith(")") else "") for p in partes]
+    elif "  " in raw_nome:
+        partes = [p.strip() for p in raw_nome.split("  ") if p.strip()]
+    else:
+        partes = [raw_nome]
+
+    # remove duplicados preservando ordem
+    return [p for i, p in enumerate(partes) if p and p not in partes[:i]]
+
+
+# ── EXTRAÇÃO (Versão 8 – definitiva) ─────────────────
+def extrair_parametros_valores(pdf_path: str) -> dict:
+    """
+    1. Identifica linha-parâmetro via _is_param_row().
+    2. Nome = (todas as linhas SEM números) que:
+        • vêm antes da linha-parâmetro (buffer)
+        • aparecem depois, até a próxima linha-parâmetro.
+    3. Se vários parâmetros estiverem colados na mesma célula,
+       divide com _explode_nome().
+    Retorna:
+        {"Viscosidade do sangue":
+             {"min": 48.264, "max": 65.371, "valor": 70.494}, ...}
+    """
+    resultado = {}
+
+    cfg = dict(
+        vertical_strategy="lines",
+        horizontal_strategy="lines",
+        intersection_y_tolerance=10,
+    )
+
+    # 1) Lê todas as linhas das tabelas em lista simples
+    linhas = []  # (nome, faixa, valor)
     with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                texto_completo += page_text + "\n"
-    
-    if len(texto_completo.strip()) < 100:  # Se texto nativo falhar (ex: PDF imagem), usa OCR
-        logging.info("Texto nativo insuficiente - usando OCR.")
-        images = convert_from_path(pdf_path)
-        for image in images:
-            texto_completo += pytesseract.image_to_string(image, lang='por') + "\n"  # 'por' para português, ajuste se necessário
+        for pg in pdf.pages:
+            for tb in pg.extract_tables(cfg):
+                for row in tb:
+                    if len(row) < 4:
+                        continue
+                    col2, col3, col4 = map(_clean, row[1:4])
+                    linhas.append((col2, col3, col4))
 
-    texto_completo = re.sub(r'\s+', ' ', texto_completo).replace(',', '.').strip()
-    logging.info(f"Texto extraído (primeiros 500 chars): {texto_completo[:500]}")
+    # 2) Varre com índice
+    buffer_antes = []   # pedaços antes da 1ª linha-parâmetro
+    i = 0
+    while i < len(linhas):
+        nome, faixa, valor = linhas[i]
 
-    # Passo 2: Parsing com máquina de estados
-    dados = []
-    sistema_atual = None
-    item_atual = None
-    conselhos_atual = ""
-    linhas = texto_completo.splitlines()
-
-    for linha in linhas:
-        linha = linha.strip()
-        if not linha:
+        # não é linha-parâmetro ⇒ acumula no buffer
+        if not _is_param_row(faixa, valor):
+            if nome:
+                buffer_antes.append(nome.strip())
+            i += 1
             continue
 
-        # Detecta sistema
-        match_sistema = get_close_matches(linha, REFERENCIA_SISTEMAS, n=1, cutoff=0.7)
-        if match_sistema and not re.search(r'\d', linha[:30]):
-            if item_atual:  # Salva anterior
-                dados.append(_criar_dado(sistema_atual, item_atual, conselhos_atual))
-            sistema_atual = match_sistema[0]
-            item_atual = None
-            conselhos_atual = ""
+        # linha-parâmetro encontrada
+        minimo, maximo = map(_num, _list_numeros(faixa)[:2])
+        valor_medido   = _num(_list_numeros(valor)[0])
+
+        partes_nome = buffer_antes + ([nome.strip()] if nome else [])
+        buffer_antes = []  # zera para próximo parâmetro
+
+        # junta TODAS as linhas seguintes até a próxima linha-parâmetro
+        j = i + 1
+        while j < len(linhas) and not _is_param_row(linhas[j][1], linhas[j][2]):
+            nm_next = linhas[j][0]
+            if nm_next:
+                partes_nome.append(nm_next.strip())
+            j += 1
+
+        nome_completo = " ".join(partes_nome)
+
+        for n in _explode_nome(nome_completo):
+            resultado[n] = {"min": minimo, "max": maximo, "valor": valor_medido}
+
+        i = j  # avança para a próxima linha-parâmetro
+
+    return resultado
+
+
+# ── VALIDAÇÃO ─────────────────────────────────────────
+def validar_parametros(dados: dict):
+    anom = []
+    for item, d in dados.items():
+        v, mn, mx = d["valor"], d["min"], d["max"]
+        if v is None or mn is None or mx is None:
             continue
+        if not (mn <= v <= mx):
+            anom.append(
+                dict(
+                    item=item,
+                    valor_real=v,
+                    status="Abaixo" if v < mn else "Acima",
+                    normal_min=mn,
+                    normal_max=mx,
+                )
+            )
+    return anom
 
-        # Detecta item: nome + min - max + valor + início de conselhos
-        match = re.match(r'(.+?)\s*(\d+\.?\d*)\s*-\s*(\d+\.?\d*)\s*(\d+\.?\d*)\s*(.*)', linha)
-        if match:
-            if item_atual:  # Salva anterior
-                dados.append(_criar_dado(sistema_atual, item_atual, conselhos_atual))
-            item_raw = match.group(1).strip()
-            item_atual = get_close_matches(item_raw, REFERENCIA_ITENS, n=1, cutoff=0.7)
-            item_atual = item_atual[0] if item_atual else item_raw
-            normal_min = float(match.group(2))
-            normal_max = float(match.group(3))
-            valor_real = float(match.group(4))
-            conselhos_atual = match.group(5).strip()
-            # Salva imediatamente com valores
-            dados.append(_criar_dado(sistema_atual, item_atual, conselhos_atual, normal_min, normal_max, valor_real))
-            conselhos_atual = ""  # Reseta para acumulação
-            continue
 
-        # Acumula conselhos se há item atual
-        if item_atual:
-            conselhos_atual += " " + linha
+# ── DOCX ──────────────────────────────────────────────
+def _to_docx(texto: str, path: str):
+    doc = Document()
+    for linha in texto.split("\n"):
+        doc.add_paragraph(linha)
+    doc.save(path)
 
-    # Salva último
-    if item_atual:
-        dados.append(_criar_dado(sistema_atual, item_atual, conselhos_atual))
 
-    # Filtro: Remove inválidos (ex: min/max absurdos ou itens vazios)
-    dados = [d for d in dados if d['item'] and d['normal_min'] <= d['normal_max'] and d['valor_real'] is not None]
-
-    if not dados:
-        raise ValueError("Nenhum dado parseado do PDF. Verifique o formato ou tente OCR manual.")
-
-    logging.info(f"Extraídos {len(dados)} itens válidos.")
-    return dados
-
-def _criar_dado(sistema, item, conselhos, min_val=None, max_val=None, valor=None):
-    if min_val is not None and max_val is not None and min_val > max_val:
-        min_val, max_val = max_val, min_val
-    return {
-        'sistema': sistema or 'Desconhecido',
-        'item': item,
-        'normal_min': min_val,
-        'normal_max': max_val,
-        'valor_real': valor,
-        'conselhos': conselhos.strip()
-    }
-
-def validar_parametros(dados):
-    anomalias = []
-    seen = set()  # Evita duplicatas
-    for d in dados:
-        key = (d['item'], d['valor_real'])
-        if key in seen:
-            continue
-        seen.add(key)
-        valor = d['valor_real']
-        min_val = d['normal_min']
-        max_val = d['normal_max']
-        if valor < min_val:
-            status = 'abaixo'
-        elif valor > max_val:
-            status = 'acima'
-        else:
-            continue
-        anomalias.append({
-            'item': f"{d['sistema']}: {d['item']}",
-            'valor_real': valor,
-            'status': status,
-            'normal_min': min_val,
-            'normal_max': max_val,
-            'conselhos': d['conselhos']
-        })
-    return anomalias
-
-def gerar_relatorio(pdf_path, nome_terapeuta, registro_terapeuta, output_path):
+def gerar_relatorio(pdf_path, terapeuta, registro,
+                    output_path="relatorio_anomalias.docx"):
     try:
         dados = extrair_parametros_valores(pdf_path)
-        anomalias = validar_parametros(dados)
-        
-        doc = Document()
-        doc.add_heading('Relatório de Anomalias - MTC Insight', 0)
-        
-        p = doc.add_paragraph()
-        p.add_run(f"Terapeuta: {nome_terapeuta}\nRegistro: {registro_terapeuta}\n").bold = True
-        
-        doc.add_heading('Anomalias Detectadas', level=1)
-        if not anomalias:
-            doc.add_paragraph('Nenhuma anomalia encontrada. Todos os parâmetros estão normais.')
+        if not dados:
+            raise ValueError("Não foi possível extrair parâmetros do PDF.")
+
+        anom = validar_parametros(dados)
+
+        linhas = [
+            "Relatório de Anomalias",
+            f"Terapeuta: {terapeuta}   Registro: {registro}",
+            "",
+        ]
+        if not anom:
+            linhas.append("🎉 Todos os parâmetros dentro da normalidade.")
         else:
-            for a in anomalias:
-                doc.add_paragraph(
-                    f"- {a['item']}: {a['valor_real']} ({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})\n"
-                    f"  Conselhos: {a['conselhos']}",
-                    style='List Bullet'
+            linhas.append(f"⚠️ {len(anom)} anomalias encontradas:")
+            for a in anom:
+                linhas.append(
+                    f"• {a['item']}: {a['valor_real']:.3f} "
+                    f"({a['status']} do normal; "
+                    f"Normal: {a['normal_min']}–{a['normal_max']})"
                 )
-        
-        doc.add_heading('Dados Extraídos Completos', level=1)
-        for d in dados:
-            doc.add_paragraph(
-                f"Sistema: {d['sistema']}\nItem: {d['item']}\nNormal: {d['normal_min']}–{d['normal_max']}\nValor Real: {d['valor_real']}\nConselhos: {d['conselhos']}\n",
-                style='Normal'
-            )
-        
-        doc.save(output_path)
-        logging.info(f"Relatório gerado em {output_path}")
-    
+
+        _to_docx("\n".join(linhas), output_path)
+        return True, output_path
     except Exception as e:
-        logging.error(f"Erro na geração do relatório: {str(e)}")
-        raise
+        return False, str(e)
+
+
+# ── CLI opcional ──────────────────────────────────────
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        print("Uso: python validacao_dinamica.py <arquivo.pdf> "
+              "\"Terapeuta\" \"Registro\"")
+        sys.exit(1)
+    ok, _ = gerar_relatorio(sys.argv[1], sys.argv[2], sys.argv[3])
+    sys.exit(0 if ok else 1)
