@@ -5,7 +5,7 @@ import subprocess
 from typing import Optional
 from validacao import extract_parameters_from_pdf, validate_parameters, generate_report
 
-# CSS personalizado (tema verde suave para MTC Insight)
+# CSS (inalterado)
 st.markdown("""
 <style>
 .stApp { background-color: #f0f7f4; color: #2e7d32; }
@@ -17,7 +17,7 @@ h1, h2, h3 { color: #1b5e20; }
 </style>
 """, unsafe_allow_html=True)
 
-# Usuários autorizados (em produção, use hashing de senhas com secrets)
+# Usuários (inalterado)
 AUTHORIZED_USERS = {
     "yan": "1234",
     "cliente1": "senha123",
@@ -28,7 +28,7 @@ AUTHORIZED_USERS = {
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
-# Tela de Login
+# Tela de Login (inalterado)
 if not st.session_state.authenticated:
     st.set_page_config(page_title="Login - MTC Insight", layout="centered")
     st.markdown('<div class="header-icon">🔐</div>', unsafe_allow_html=True)
@@ -49,7 +49,7 @@ if not st.session_state.authenticated:
 # App Principal
 st.set_page_config(page_title="MTC Insight Pro", layout="wide", page_icon="🌿")
 
-# Sidebar
+# Sidebar (inalterado)
 with st.sidebar:
     st.success("🔓 Autenticado com sucesso!")
     st.markdown("### Menu")
@@ -64,14 +64,14 @@ with st.sidebar:
         - Clique em Validar.
         """)
 
-# Header
+# Header (inalterado)
 st.markdown('<div class="header-icon">🌿</div>', unsafe_allow_html=True)
 st.title("MTC Insight Pro")
 st.caption("Valide relatórios médicos rapidamente. Suporta PDF e DOCX.")
 
 st.divider()
 
-# Informações do Terapeuta
+# Informações do Terapeuta (inalterado)
 st.subheader("🧑‍⚕️ Dados do Terapeuta")
 col1, col2 = st.columns(2)
 therapist_name = col1.text_input("Nome do Terapeuta", placeholder="Ex: Dr. João Silva")
@@ -102,11 +102,20 @@ if submit:
                 # Converte DOCX para PDF se necessário
                 pdf_path = input_path
                 if ext == ".docx":
-                    pdf_path = input_path.replace(".docx", ".pdf")
+                    pdf_path = os.path.join(tempfile.gettempdir(), "converted.pdf")
                     subprocess.run(["libreoffice", "--headless", "--convert-to", "pdf", input_path, "--outdir", tempfile.gettempdir()], check=True)
 
                 # Extrai e valida
                 parameters = extract_parameters_from_pdf(pdf_path)
+                
+                # Debug: Mostra parâmetros extraídos
+                with st.expander("🛠 Debug: Parâmetros Extraídos (para verificação)"):
+                    if parameters:
+                        for name, data in parameters.items():
+                            st.markdown(f"- **{name}**: Valor {data['valor']:.3f} (Range: {data['min']}–{data['max']})")
+                    else:
+                        st.warning("Nenhum parâmetro extraído. Verifique o PDF.")
+
                 anomalies = validate_parameters(parameters)
 
                 # Feedback
