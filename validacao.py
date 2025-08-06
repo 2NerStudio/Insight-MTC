@@ -1,5 +1,5 @@
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 import pdfplumber
 from docx import Document
 import os
@@ -24,7 +24,7 @@ def is_header_line(line: str) -> bool:
 
 def is_valid_name(name: str) -> bool:
     name_lower = name.lower()
-    invalid_starts = ['(', ')', '-', 'do', 'da', 'de', 'e', 'o', 'a']  # Evita fragmentos
+    invalid_starts = ['(', ')', '-', 'do', 'da', 'de', 'e', 'o', 'a']
     invalid_ends = [' de', ' do', ' da', ' ncia', ' o', '-']
     if name_lower.startswith(tuple(invalid_starts)) or name_lower.endswith(tuple(invalid_ends)):
         return False
@@ -32,7 +32,6 @@ def is_valid_name(name: str) -> bool:
     word_count = len(name.split())
     if char_count < 10 or char_count > 60 or word_count > 8:
         return False
-    # Lista branca de termos válidos (baseada no texto original)
     valid_terms = [
         "viscosidade", "cristal de colesterol", "gordura do sangue", "resistência vascular", "elasticidade vascular", "demanda de sangue", "consumo de oxigênio", "volume sistólico", "impedância do bombeamento", "força de bombeamento", "elasticidade da artéria", "pressão de perfusão", "elasticidade dos vasos", "situação do fornecimento", "coeficiente das funções", "metabolismo de proteínas", "função de produção", "função de desintoxicação", "função de secreção", "teor de gordura", "globulin a do soro", "bilirrubina total", "fosfatase alcalina", "ácido biliar total", "bilirrubina", "insulina", "polipeptídeo pancreático", "glucagon", "urobilinogênio", "ácido úrico", "nitrogênio uréico", "proteína urinária", "atividade pulmonar", "capacidade pulmonar total", "resistência das vias", "teor de oxigênio", "fornecimento de sangue", "arterioesclerose cerebral", "condição das funções", "indicador de depressão", "indicador de memória", "coeficiente de oesteoclastos", "perda de cálcio", "grau de hiperplasia", "grau de osteoporose", "densidade óssea", "calcificação coluna", "coeficiente de hiperplasia", "coeficiente de osteoporose", "coeficiente de reumatismo", "coeficiente de secreção", "coeficiente de açúcar", "capacidade de reação", "capacidade cerebral", "falta de água", "hipóxia", "ph", "bebida estimulante", "radiação eletromagnética", "tabaco/nicotina", "resíduos tóxicos", "cálcio", "ferro", "zinco", "selênio", "fósforo", "potássio", "magnésio", "cobre", "cobalto", "manganês", "iodo", "níquel", "flúor", "molibdênio", "vanádio", "estanho", "silício", "estrôncio", "boro", "estrogênio", "gonadotrofina", "prolactina", "progesterona", "coeficiente de vaginite", "coeficiente de inflamação", "coeficiente de anexite", "coeficiente de cervicite", "coeficiente de cisto", "índice dos radicais", "índice de colágeno", "índice de oleosidade", "índice de imunidade", "índice de hidratação", "perda de hidratação", "índice de dilatação", "índice de elasticidade", "índice de melanina", "índice de queratinócitos", "índice de secreção", "índice gonadal", "índice de linfonodo", "índice de imunidade", "índice do baço", "índice do timo", "coeficiente de fibrosidade", "mastite aguda", "mastite crônica", "distúrbios endócrinos", "fibroadenoma", "vitamina", "lisina", "triptofano", "fenilalanina", "metionina", "treonina", "isoleucina", "leucina", "valina", "histidina", "arginina", "fosfatase alcalina", "osteocalcina", "cartilagem grandes", "cartilagem pequenas", "linha epifisária", "bolsas sob os olhos", "colágeno das rugas", "pigmentação da pele", "obstrução linfática", "afrouxamento e", "edema", "atividade das células", "fadiga visual", "chumbo", "mercúrio", "cádmio", "crômio", "arsênico", "antimônio", "tálio", "alumínio", "índice de alergia", "nicotinamida", "biotina", "ácido pantotênico", "ácido fólico", "coenzima q10", "glutationa", "metabolismo anormal", "anormalidades tecido", "hiperinsulinemia", "anomalia hipotálamo", "conteúdo anormal de triglicerídeos", "olhos", "dentes", "cabelo e pele", "sistema endocrino", "circulação de sangue", "estômago e intervalo", "sistema imunologico", "articulações", "tecido muscular", "metabolismo da gordura", "desintoxicação e metabolismo", "sistema reprodutivo", "sistema nervoso", "esqueleto", "peristáltica do intestino", "absorção do cólon", "bactérias intestinais", "pressão intraluminal", "tiroxina livre", "tiroglobulina", "anticorpos antitireoglobulina", "triiodotironina", "ácido linoleico", "α-ácido linolênico", "γ-ácido linolênico", "ácido araquidônico", "estrogénio", "andrógeno", "progesterona", "hormona luteinizante", "prolactina", "hormona estimuladora folícula", "meridiano do pulmão", "intestino grosso", "estômago", "baço", "coração", "intestino delgado", "bexiga", "rins", "pericárdio", "triplo aquecedor", "vesícula biliar", "fígado", "ren mai", "meridiano governador", "meridiano vital", "da mai", "acidente vascular cerebral", "pulso", "resistência periférica", "coeficiente da onda", "saturação do oxigênio", "volume do oxigênio", "pressão do oxigênio", "viscosidade do sangue", "colesterol total", "triglicerídeos", "lipoproteína de alta", "lipoproteína de baixa", "gordura neutra", "complexo imunológico", "hormona beta", "proteína de resposta", "fibrinogênio", "taxa de sedimentação", "barreira tecidual", "células imunitárias", "molécula imunitária", "imunitário celular", "imunidade humoral", "vergonha", "culpa", "apatia", "dor", "medo", "desejo", "raiva", "orgulho", "coragem", "neutralidade", "vontade", "aceitação", "razão", "amor", "alegria", "paz", "iluminismo", "volume maré", "volume inspiratório", "capacidade residual", "volume residual", "fosfolipídico", "esfingolípide", "esfingomielina", "lecitina", "fosfolípide cerebral", "lipossômico", "ácidos gordos saturados", "ácidos gordos não saturados", "ácidos gordos essenciais", "triglicéridos"
     ]
@@ -80,7 +79,7 @@ def extract_parameters_from_pdf(pdf_path: str) -> Dict[str, Dict[str, float]]:
                                     del parameters[existing]
                                     seen.remove(normalize_name(existing))
                                 else:
-                                    name = existing  # Mantém o existente se mais longo
+                                    name = existing
                                 break
                         if norm_name in seen:
                             continue
@@ -100,7 +99,7 @@ def extract_parameters_from_pdf(pdf_path: str) -> Dict[str, Dict[str, float]]:
 
     return parameters
 
-# Validação (com tolerância para bordas exatas)
+# Validação
 def validate_parameters(parameters: Dict[str, Dict[str, float]]) -> List[Dict[str, any]]:
     anomalies = []
     for name, data in parameters.items():
@@ -120,7 +119,7 @@ def validate_parameters(parameters: Dict[str, Dict[str, float]]) -> List[Dict[st
             })
     return anomalies
 
-# Geração de relatório (inalterada)
+# Geração de relatório
 def generate_report(anomalies: List[Dict[str, any]], therapist: str, registry: str, output_path: str) -> None:
     doc = Document()
     doc.add_heading("Relatório de Anomalias", level=1)

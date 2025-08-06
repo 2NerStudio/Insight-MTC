@@ -107,19 +107,14 @@ if submit:
 
                 # Extrai e valida
                 parameters = extract_parameters_from_pdf(pdf_path)
-
-                # Debug: Mostra parâmetros extraídos e itens descartados (simulado, pois não temos o log completo; ajuste se precisar)
+                
+                # Debug: Mostra parâmetros extraídos
                 with st.expander("🛠 Debug: Parâmetros Extraídos (para verificação)"):
                     if parameters:
                         st.info(f"📊 {len(parameters)} parâmetros únicos extraídos.")
                         for name in sorted(parameters.keys()):
                             data = parameters[name]
                             st.markdown(f"- **{name}**: Valor {data['valor']:.3f} (Range: {data['min']}–{data['max']})")
-                        # Exemplo de descartados (em produção, você pode logar durante extração)
-                        discarded_examples = ["(flora intestinal) pressão intraluminal Os resultados do teste...", "Nome: Exemplo(Feminino) Sexo: Feminino Idade: 31..."]  # Simulado
-                        st.warning("Exemplos de itens descartados (por invalidade):")
-                        for disc in discarded_examples:
-                            st.markdown(f"- {disc}")
                     else:
                         st.warning("Nenhum parâmetro extraído. Verifique o PDF.")
 
