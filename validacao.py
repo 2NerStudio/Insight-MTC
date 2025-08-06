@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 import pdfplumber
 from docx import Document
 import os
+from difflib import SequenceMatcher  # Para similaridade de nomes
 
 # Funções utilitárias
 def clean_text(text: Optional[str]) -> str:
@@ -17,15 +18,20 @@ def extract_numbers(text: str) -> List[float]:
     return [float(m.replace(",", ".")) for m in matches]
 
 def is_valid_name(name: str) -> bool:
-    """Verifica se é um nome válido (mínimo 10 chars alfabéticos, não cabeçalho)."""
+    """Verifica se é um nome válido (10-50 chars, não cabeçalho, parece parâmetro)."""
     name_lower = name.lower()
-    invalid_keywords = ["intervalo normal", "valor de medição", "resultado do teste", "item de teste", "conselho de peritos", "real"]
-    if len(re.sub(r'[^a-zA-Z]', '', name)) < 10 or any(kw in name_lower for kw in invalid_keywords):
+    invalid_keywords = [
+        "intervalo normal", "valor de medição", "resultado do teste", "item de teste", "conselho de peritos", "real",
+        "nome: exemplo", "sexo: feminino", "idade: 31", "figura: peso padrão", "período do teste", "os resultados do teste",
+        "cartão do relatório", "análise", "resultados reais do teste"
+    ]
+    word_count = len(name.split())
+    char_count = len(re.sub(r'[^a-zA-Z]', '', name))
+    if char_count < 10 or char_count > 50 or word_count > 10 or any(kw in name_lower for kw in invalid_keywords):
         return False
-    # Evita nomes cortados (ex: termina com preposição curta)
-    if name_lower.endswith((" de", " do", " da", " ncia", " o")):
-        return False
-    return True
+    # Deve conter padrões de parâmetro (ex: "Coeficiente", "Índice", nomes de órgãos)
+    valid_patterns = re.search(r'(coeficiente|índice|grau|vitamina|ácido|hormona|meridiano|elasticidade|viscosidade|gordura|demanda|consumo|impedância|força|pressão|situação|metabolismo|função|teor|atividade|capacidade|resistência|fornecimento|condição|perda|calcificação|secreção|bilirrubina|insulina|polipeptídeo|glucagon|urobilinogênio|nitrogênio|proteína|arterioesclerose|indicador|osteoclastos|hiperplasia|osteoporose|densidade|reumatismo|açúcar|reação|falta|hipóxia|ph|bebida|radiação|tabaco|resíduos|cálcio|ferro|zinco|selênio|fósforo|potássio|magnésio|cobre|cobalto|manganês|iodo|níquel|flúor|molibdênio|vanádio|estanho|silício|estrôncio|boro|estrogênio|gonadotrofina|prolactina|progesterona|vaginite|inflamação|anexite|cervicite|cisto|radicais|colágeno|oleosidade|imunidade|hidratação|dilatação|elasticidade|melanina|queratinócitos|tireóide|paratireóide|supra-renal|pituitária|pineal|timo|gonadal|linfonodo|amígdalas|medula|baço|imunoglobulina|respiratório|gastrointestinal|mucosa|fibrosidade|mastite|distúrbios|fibroadenoma|lisina|triptofano|fenilalanina|metionina|treonina|isoleucina|leucina|valina|histidina|arginina|fosfatase|osteocalcina|cartilagem|epifisária|bolsas|pigmentação|obstrução|afrouxamento|edema|células|fadiga|chumbo|mercúrio|cádmio|crômio|arsênico|antimônio|tálio|alumínio|alergia|nicotinamida|biotina|pantotênico|fólico|q10|glutationa|lipidos|anormalidades|hiperinsulinemia|anomalia|triglicerídeos|olhos|dentes|cabelo|pele|endocrino|circulação|estômago|intestino|imunologico|articulações|muscular|gordura|desintoxicação|reprodutivo|nervoso|esqueleto|peristáltica|absorção|bactérias|pressão|tiroxina|tiroglobulina|anticorpos|triiodotironina|linoleico|linolênico|araquidônico|estrogénio|andrógeno|progesterona|luteinizante|prolactina|folícula|pulmão|intestino|estômago|baço|coração|delgado|bexiga|rims|pericárdio|aquecedor|vesícula|fígado|ren|mai|governador|vital|acidente|pulso|resistência|onda|saturação|volume|pressão|viscosidade|colesterol|triglicerídeos|lipoproteína|gordura|complexo|hormona|beta|fibrinogênio|sedimentação|barreira|células|molécula|celular|humoral|vergonha|culpa|apatia|dor|medo|desejo|raiva|orgulho|coragem|neutralidade|vontade|aceitação|razão|amor|alegria|paz|iluminismo|maré|inspiratório|residual|fosfolipídico|esfingolípide|esfingomielina|lecitina|lipossômico|gordos|saturados|não saturados|essenciais|triglicéridos|medidas|hidratação|volume|muscular|massa|corporal|magro|peso|subpadrão|padrão|sobrepadrão|altura|nota|homem|mulher|propriedade|conteúdo|gordura|porcentagem|razão|abdominal|nutrição|grau|obesidade|bmi|bmr|bcm|tipo|musculatura|ausente|bom|excessivo|proteínas|gorduras|sais|equilíbrio|superior|inferior|membros|simetria|controle|alvo|forma|avaliação|geral|explicação|padrões|aprovado|bom|excelente)', name_lower)
+    return bool(valid_patterns)
 
 def normalize_name(name: str) -> str:
     """Normaliza nome para deduplicação (lowercase, remove parênteses extras)."""
