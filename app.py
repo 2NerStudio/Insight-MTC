@@ -107,11 +107,13 @@ if submit:
 
                 # Extrai e valida
                 parameters = extract_parameters_from_pdf(pdf_path)
-                
+
                 # Debug: Mostra parâmetros extraídos
                 with st.expander("🛠 Debug: Parâmetros Extraídos (para verificação)"):
                     if parameters:
-                        for name, data in parameters.items():
+                        st.info(f"📊 {len(parameters)} parâmetros únicos extraídos.")
+                        for name in sorted(parameters.keys()):
+                            data = parameters[name]
                             st.markdown(f"- **{name}**: Valor {data['valor']:.3f} (Range: {data['min']}–{data['max']})")
                     else:
                         st.warning("Nenhum parâmetro extraído. Verifique o PDF.")
