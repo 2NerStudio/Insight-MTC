@@ -2,190 +2,131 @@ import streamlit as st
 import tempfile
 import os
 import subprocess
+from typing import Optional
+from validacao import extract_parameters_from_pdf, validate_parameters, generate_report
 
-# Novo import (assumindo que você tem esse módulo)
-from validacao_dinamica import (
-    extrair_parametros_valores,
-    validar_parametros,
-    gerar_relatorio,
-)
-
-# CSS personalizado para estética
+# CSS personalizado (tema verde suave para MTC Insight)
 st.markdown("""
-    <style>
-    /* Tema geral: Verde suave para MTC Insight */
-    .stApp {
-        background-color: #f0f7f4; /* Fundo claro verde-água */
-        color: #2e7d32; /* Verde escuro para texto */
-    }
-    .stButton > button {
-        background-color: #4caf50; /* Verde botão */
-        color: white;
-        border-radius: 8px;
-        border: none;
-        padding: 0.5em 1em;
-        transition: background-color 0.3s;
-    }
-    .stButton > button:hover {
-        background-color: #388e3c; /* Hover mais escuro */
-    }
-    .stTextInput > div > input {
-        border: 1px solid #81c784; /* Borda verde clara */
-        border-radius: 4px;
-    }
-    .stAlert {
-        border-radius: 8px;
-        padding: 1em;
-    }
-    h1, h2, h3 {
-        color: #1b5e20; /* Verde título */
-    }
-    /* Ícone no header */
-    .header-icon {
-        font-size: 3em;
-        text-align: center;
-        margin-bottom: 0.5em;
-    }
-    </style>
+<style>
+.stApp { background-color: #f0f7f4; color: #2e7d32; }
+.stButton > button { background-color: #4caf50; color: white; border-radius: 8px; padding: 0.5em 1em; }
+.stButton > button:hover { background-color: #388e3c; }
+.stTextInput > div > input { border: 1px solid #81c784; border-radius: 4px; }
+h1, h2, h3 { color: #1b5e20; }
+.header-icon { font-size: 3em; text-align: center; margin-bottom: 0.5em; }
+</style>
 """, unsafe_allow_html=True)
 
-# ╔════════ LOGIN SIMPLES ════════╗
-usuarios_autorizados = {
+# Usuários autorizados (em produção, use hashing de senhas com secrets)
+AUTHORIZED_USERS = {
     "yan": "1234",
     "cliente1": "senha123",
     "Dolorice20": "Rebeca10",
 }
 
-if "autenticado" not in st.session_state:
-    st.session_state.autenticado = False
+# Estado de sessão
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
 
-if not st.session_state.autenticado:
+# Tela de Login
+if not st.session_state.authenticated:
     st.set_page_config(page_title="Login - MTC Insight", layout="centered")
     st.markdown('<div class="header-icon">🔐</div>', unsafe_allow_html=True)
-    st.title("Área de Login - MTC Insight")
-    st.caption("Acesse sua ferramenta de validação de relatórios")
-    
+    st.title("Login - MTC Insight")
+    st.caption("Acesse a ferramenta de validação de relatórios")
+
     with st.form(key="login_form"):
-        usuario = st.text_input("Usuário", placeholder="Digite seu usuário", help="Seu nome de usuário cadastrado")
-        senha = st.text_input("Senha", type="password", placeholder="Digite sua senha", help="Mantenha segura!")
-        submit = st.form_submit_button("Entrar", help="Clique para autenticar")
-        if submit:
-            if usuarios_autorizados.get(usuario) == senha:
-                st.session_state.autenticado = True
-                st.rerun()  # Alterado aqui: use st.rerun() em vez de experimental_rerun
+        username = st.text_input("Usuário", placeholder="Digite seu usuário")
+        password = st.text_input("Senha", type="password", placeholder="Digite sua senha")
+        if st.form_submit_button("Entrar"):
+            if AUTHORIZED_USERS.get(username) == password:
+                st.session_state.authenticated = True
+                st.rerun()
             else:
                 st.error("❌ Usuário ou senha inválidos.")
     st.stop()
-# ╚═══════════════════════════════╝
 
-# ╔════════ APP PRINCIPAL ════════╗
-st.set_page_config(page_title="MTC Insight", layout="wide", page_icon="🌿")
+# App Principal
+st.set_page_config(page_title="MTC Insight Pro", layout="wide", page_icon="🌿")
 
-# Sidebar melhorada
+# Sidebar
 with st.sidebar:
     st.success("🔓 Autenticado com sucesso!")
     st.markdown("### Menu")
-    st.caption("Bem-vindo ao MTC Insight Pro")
-    if st.button("🚪 Sair", help="Clique para logout"):
-        st.session_state.autenticado = False
-        st.rerun()  # Alterado aqui: use st.rerun() em vez de experimental_rerun
+    if st.button("🚪 Sair"):
+        st.session_state.authenticated = False
+        st.rerun()
     st.divider()
-    with st.expander("ℹ️ Instruções Rápidas"):
+    with st.expander("ℹ️ Instruções"):
         st.markdown("""
-        - Preencha seus dados.
+        - Preencha dados do terapeuta.
         - Faça upload de PDF ou DOCX.
-        - Clique em Validar para análise.
+        - Clique em Validar.
         """)
 
-# Header principal
+# Header
 st.markdown('<div class="header-icon">🌿</div>', unsafe_allow_html=True)
 st.title("MTC Insight Pro")
-st.caption("Valide parâmetros de relatórios médicos de forma rápida e segura. Suporta PDF e DOCX.")
+st.caption("Valide relatórios médicos rapidamente. Suporta PDF e DOCX.")
 
 st.divider()
 
-# Seção de Informações do Terapeuta (em colunas para melhor layout)
-st.subheader("🧑‍⚕️ Informações do Terapeuta")
+# Informações do Terapeuta
+st.subheader("🧑‍⚕️ Dados do Terapeuta")
 col1, col2 = st.columns(2)
-with col1:
-    nome_terapeuta = st.text_input("Nome completo do terapeuta", placeholder="Ex: Dr. João Silva", help="Seu nome completo")
-with col2:
-    registro_terapeuta = st.text_input("CRF / CRTH / Registro profissional", placeholder="Ex: CRF-12345", help="Número de registro profissional")
+therapist_name = col1.text_input("Nome do Terapeuta", placeholder="Ex: Dr. João Silva")
+therapist_registry = col2.text_input("Registro Profissional", placeholder="Ex: CRF-12345")
 
 st.divider()
 
-# Seção de Upload e Validação (em form para submissão única)
-st.subheader("📎 Upload do Relatório (.pdf ou .docx)")
+# Upload e Validação
+st.subheader("📎 Upload do Relatório")
 with st.form(key="upload_form"):
-    arquivo = st.file_uploader("Selecione o arquivo", type=["pdf", "docx"], help="Arraste ou clique para selecionar")
-    submit_validar = st.form_submit_button("⚙️ Validar Parâmetros", help="Inicie a validação")
+    uploaded_file = st.file_uploader("Selecione PDF ou DOCX", type=["pdf", "docx"])
+    submit = st.form_submit_button("⚙️ Validar")
 
-if submit_validar:
-    if not nome_terapeuta or not registro_terapeuta:
-        st.warning("⚠️ Preencha os dados do terapeuta antes de prosseguir.")
-    elif not arquivo:
-        st.warning("⚠️ Envie um arquivo PDF ou DOCX para análise.")
+if submit:
+    if not therapist_name or not therapist_registry:
+        st.warning("⚠️ Preencha os dados do terapeuta.")
+    elif not uploaded_file:
+        st.warning("⚠️ Selecione um arquivo.")
     else:
-        with st.spinner("🔍 Processando o relatório..."):
+        with st.spinner("🔍 Processando..."):
             try:
-                # 1) Salvar upload
-                ext = os.path.splitext(arquivo.name)[1].lower()
-                tmp_input = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-                tmp_input.write(arquivo.read())
-                tmp_input.close()
+                # Salva arquivo temporário
+                ext = os.path.splitext(uploaded_file.name)[1].lower()
+                with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                    tmp.write(uploaded_file.read())
+                    input_path = tmp.name
 
-                # 2) Converter DOCX para PDF se necessário
+                # Converte DOCX para PDF se necessário
+                pdf_path = input_path
                 if ext == ".docx":
-                    tmp_pdf = tmp_input.name.replace(".docx", ".pdf")
-                    subprocess.run(
-                        [
-                            "libreoffice",
-                            "--headless",
-                            "--convert-to",
-                            "pdf",
-                            tmp_input.name,
-                            "--outdir",
-                            os.path.dirname(tmp_input.name),
-                        ],
-                        check=True,
-                    )
-                    pdf_path = tmp_pdf
+                    pdf_path = input_path.replace(".docx", ".pdf")
+                    subprocess.run(["libreoffice", "--headless", "--convert-to", "pdf", input_path, "--outdir", tempfile.gettempdir()], check=True)
+
+                # Extrai e valida
+                parameters = extract_parameters_from_pdf(pdf_path)
+                anomalies = validate_parameters(parameters)
+
+                # Feedback
+                if not anomalies:
+                    st.success("🎉 Todos os parâmetros normais!")
                 else:
-                    pdf_path = tmp_input.name
+                    st.error(f"⚠️ {len(anomalies)} anomalias:")
+                    for a in anomalies:
+                        st.markdown(f"- **{a['item']}**: {a['valor_real']:.3f} ({a['status']}; Normal: {a['normal_min']}–{a['normal_max']})")
 
-                # 3) Extrair e validar
-                dados = extrair_parametros_valores(pdf_path)
-                anomalias = validar_parametros(dados)
-
-                # 4) Feedback ao usuário
-                if not anomalias:
-                    st.success("🎉 Todos os parâmetros estão dentro do intervalo normal! Nenhum problema detectado.")
-                else:
-                    st.error(f"⚠️ {len(anomalias)} anomalias encontradas. Veja os detalhes abaixo:")
-                    for a in anomalias:
-                        st.markdown(
-                            f"- **{a['item']}**: {a['valor_real']}  "
-                            f"({a['status']} do normal; Normal: {a['normal_min']}–{a['normal_max']})"
-                        )
-
-                    # 5) Gerar relatório e permitir download
-                    output_path = os.path.join(
-                        tempfile.gettempdir(), "relatorio_anomalias.docx"
-                    )
-                    gerar_relatorio(
-                        pdf_path, nome_terapeuta, registro_terapeuta, output_path
-                    )
+                    # Gera e oferece download
+                    output_path = os.path.join(tempfile.gettempdir(), "relatorio_anomalias.docx")
+                    generate_report(anomalies, therapist_name, therapist_registry, output_path)
                     with open(output_path, "rb") as f:
-                        st.download_button(
-                            "⬇️ Baixar Relatório de Anomalias (.docx)",
-                            data=f.read(),
-                            file_name="relatorio_anomalias.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            help="Baixe o relatório gerado para revisão offline"
-                        )
+                        st.download_button("⬇️ Baixar Relatório", f.read(), file_name="relatorio_anomalias.docx")
+            except Exception as e:
+                st.error(f"Erro: {str(e)}")
             finally:
-                # 6) Limpeza de temporários
-                os.unlink(tmp_input.name)
+                # Limpeza
+                if os.path.exists(input_path):
+                    os.unlink(input_path)
                 if ext == ".docx" and os.path.exists(pdf_path):
                     os.unlink(pdf_path)
-# ╚═══════════════════════════════╝
