@@ -1,5 +1,5 @@
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import pdfplumber
 from docx import Document
 import os
@@ -7,59 +7,56 @@ from difflib import SequenceMatcher
 
 # Funções utilitárias
 def clean_text(text: Optional[str]) -> str:
-    """Limpa texto removendo quebras de linha e normalizando."""
     if not text:
         return ""
     return re.sub(r'\s+', ' ', text.replace("\n", " ").replace("\r", " ").replace(",", ".")).strip()
 
 def extract_numbers(text: str) -> List[float]:
-    """Extrai números de uma string."""
     matches = re.findall(r"[-+]?\d+(?:[.,]\d+)?", text)
     return [float(m.replace(",", ".")) for m in matches]
 
 def is_header_line(line: str) -> bool:
-    """Detecta linhas de cabeçalho ou repetidas."""
     line_lower = line.lower()
     invalid_keywords = [
-        "os resultados do teste apenas para referência", "cartão do relatório de análise", "nome: exemplo", "sexo: feminino", "idade: 31", "figura: peso padrão", "período do teste", "resultados reais do teste"
+        "os resultados do teste apenas para referência", "cartão do relatório de análise", "nome: exemplo", "sexo: feminino", "idade: 31", "figura: peso padrão", "período do teste", "resultados reais do teste", "conselho de peritos", "real"
     ]
     return any(kw in line_lower for kw in invalid_keywords) or len(line) < 20 or not re.search(r'[a-zA-Z]{5,}', line)
 
 def is_valid_name(name: str) -> bool:
-    """Valida nome: 5-40 chars, contém termos de parâmetro, não cabeçalho."""
     name_lower = name.lower()
-    invalid_keywords = ["intervalo normal", "valor de medição", "resultado do teste", "item de teste", "conselho de peritos", "real", "nome:", "sexo:", "idade:", "figura:", "período do teste"]
-    word_count = len(name.split())
-    char_count = len(re.sub(r'[^a-zA-Z]', '', name))
-    if char_count < 5 or char_count > 40 or word_count > 8 or any(kw in name_lower for kw in invalid_keywords):
+    invalid_starts = ['(', ')', '-', 'do', 'da', 'de', 'e', 'o', 'a']  # Evita fragmentos
+    invalid_ends = [' de', ' do', ' da', ' ncia', ' o', '-']
+    if name_lower.startswith(tuple(invalid_starts)) or name_lower.endswith(tuple(invalid_ends)):
         return False
-    # Deve conter padrões de parâmetro
-    valid_patterns = re.search(r'(coeficiente|índice|grau|vitamina|ácido|hormona|meridiano|elasticidade|viscosidade|gordura|demanda|consumo|impedância|força|pressão|situação|metabolismo|função|teor|atividade|capacidade|resistência|fornecimento|condição|perda|calcificação|secreção|bilirrubina|insulina|polipeptídeo|glucagon|urobilinogênio|nitrogênio|proteína|arterioesclerose|indicador|osteoclastos|hiperplasia|osteoporose|densidade|reumatismo|açúcar|reação|falta|hipóxia|ph|bebida|radiação|tabaco|resíduos|cálcio|ferro|zinco|selênio|fósforo|potássio|magnésio|cobre|cobalto|manganês|iodo|níquel|flúor|molibdênio|vanádio|estanho|silício|estrôncio|boro|estrogênio|gonadotrofina|prolactina|progesterona|vaginite|inflamação|anexite|cervicite|cisto|radicais|colágeno|oleosidade|imunidade|hidratação|dilatação|elasticidade|melanina|queratinócitos|tireóide|paratireóide|supra-renal|pituitária|pineal|timo|gonadal|linfonodo|amígdalas|medula|baço|imunoglobulina|respiratório|gastrointestinal|mucosa|fibrosidade|mastite|distúrbios|fibroadenoma|lisina|triptofano|fenilalanina|metionina|treonina|isoleucina|leucina|valina|histidina|arginina|fosfatase|osteocalcina|cartilagem|epifisária|bolsas|pigmentação|obstrução|afrouxamento|edema|células|fadiga|chumbo|mercúrio|cádmio|crômio|arsênico|antimônio|tálio|alumínio|alergia|nicotinamida|biotina|pantotênico|fólico|q10|glutationa|lipidos|anormalidades|hiperinsulinemia|anomalia|triglicerídeos|olhos|dentes|cabelo|pele|endocrino|circulação|estômago|intestino|imunologico|articulações|muscular|gordura|desintoxicação|reprodutivo|nervoso|esqueleto|peristáltica|absorção|bactérias|pressão|tiroxina|tiroglobulina|anticorpos|triiodotironina|linoleico|linolênico|araquidônico|estrogénio|andrógeno|progesterona|luteinizante|prolactina|folícula|pulmão|intestino|estômago|baço|coração|delgado|bexiga|rims|pericárdio|aquecedor|vesícula|fígado|ren|mai|governador|vital|acidente|pulso|resistência|onda|saturação|volume|pressão|viscosidade|colesterol|triglicerídeos|lipoproteína|gordura|complexo|hormona|beta|fibrinogênio|sedimentação|barreira|células|molécula|celular|humoral|vergonha|culpa|apatia|dor|medo|desejo|raiva|orgulho|coragem|neutralidade|vontade|aceitação|razão|amor|alegria|paz|iluminismo|maré|inspiratório|residual|fosfolipídico|esfingolípide|esfingomielina|lecitina|lipossômico|gordos|saturados|não saturados|essenciais|triglicéridos|medidas|hidratação|volume|muscular|massa|corporal|magro|peso|subpadrão|padrão|sobrepadrão|altura|nota|homem|mulher|propriedade|conteúdo|gordura|porcentagem|razão|abdominal|nutrição|grau|obesidade|bmi|bmr|bcm|tipo|musculatura|ausente|bom|excessivo|proteínas|gorduras|sais|equilíbrio|superior|inferior|membros|simetria|controle|alvo|forma|avaliação|geral|explicação|padrões|aprovado|bom|excelente)', name_lower)
-    return bool(valid_patterns)
+    char_count = len(re.sub(r'[^a-zA-Z]', '', name))
+    word_count = len(name.split())
+    if char_count < 10 or char_count > 60 or word_count > 8:
+        return False
+    # Lista branca de termos válidos (baseada no texto original)
+    valid_terms = [
+        "viscosidade", "cristal de colesterol", "gordura do sangue", "resistência vascular", "elasticidade vascular", "demanda de sangue", "consumo de oxigênio", "volume sistólico", "impedância do bombeamento", "força de bombeamento", "elasticidade da artéria", "pressão de perfusão", "elasticidade dos vasos", "situação do fornecimento", "coeficiente das funções", "metabolismo de proteínas", "função de produção", "função de desintoxicação", "função de secreção", "teor de gordura", "globulin a do soro", "bilirrubina total", "fosfatase alcalina", "ácido biliar total", "bilirrubina", "insulina", "polipeptídeo pancreático", "glucagon", "urobilinogênio", "ácido úrico", "nitrogênio uréico", "proteína urinária", "atividade pulmonar", "capacidade pulmonar total", "resistência das vias", "teor de oxigênio", "fornecimento de sangue", "arterioesclerose cerebral", "condição das funções", "indicador de depressão", "indicador de memória", "coeficiente de oesteoclastos", "perda de cálcio", "grau de hiperplasia", "grau de osteoporose", "densidade óssea", "calcificação coluna", "coeficiente de hiperplasia", "coeficiente de osteoporose", "coeficiente de reumatismo", "coeficiente de secreção", "coeficiente de açúcar", "capacidade de reação", "capacidade cerebral", "falta de água", "hipóxia", "ph", "bebida estimulante", "radiação eletromagnética", "tabaco/nicotina", "resíduos tóxicos", "cálcio", "ferro", "zinco", "selênio", "fósforo", "potássio", "magnésio", "cobre", "cobalto", "manganês", "iodo", "níquel", "flúor", "molibdênio", "vanádio", "estanho", "silício", "estrôncio", "boro", "estrogênio", "gonadotrofina", "prolactina", "progesterona", "coeficiente de vaginite", "coeficiente de inflamação", "coeficiente de anexite", "coeficiente de cervicite", "coeficiente de cisto", "índice dos radicais", "índice de colágeno", "índice de oleosidade", "índice de imunidade", "índice de hidratação", "perda de hidratação", "índice de dilatação", "índice de elasticidade", "índice de melanina", "índice de queratinócitos", "índice de secreção", "índice gonadal", "índice de linfonodo", "índice de imunidade", "índice do baço", "índice do timo", "coeficiente de fibrosidade", "mastite aguda", "mastite crônica", "distúrbios endócrinos", "fibroadenoma", "vitamina", "lisina", "triptofano", "fenilalanina", "metionina", "treonina", "isoleucina", "leucina", "valina", "histidina", "arginina", "fosfatase alcalina", "osteocalcina", "cartilagem grandes", "cartilagem pequenas", "linha epifisária", "bolsas sob os olhos", "colágeno das rugas", "pigmentação da pele", "obstrução linfática", "afrouxamento e", "edema", "atividade das células", "fadiga visual", "chumbo", "mercúrio", "cádmio", "crômio", "arsênico", "antimônio", "tálio", "alumínio", "índice de alergia", "nicotinamida", "biotina", "ácido pantotênico", "ácido fólico", "coenzima q10", "glutationa", "metabolismo anormal", "anormalidades tecido", "hiperinsulinemia", "anomalia hipotálamo", "conteúdo anormal de triglicerídeos", "olhos", "dentes", "cabelo e pele", "sistema endocrino", "circulação de sangue", "estômago e intervalo", "sistema imunologico", "articulações", "tecido muscular", "metabolismo da gordura", "desintoxicação e metabolismo", "sistema reprodutivo", "sistema nervoso", "esqueleto", "peristáltica do intestino", "absorção do cólon", "bactérias intestinais", "pressão intraluminal", "tiroxina livre", "tiroglobulina", "anticorpos antitireoglobulina", "triiodotironina", "ácido linoleico", "α-ácido linolênico", "γ-ácido linolênico", "ácido araquidônico", "estrogénio", "andrógeno", "progesterona", "hormona luteinizante", "prolactina", "hormona estimuladora folícula", "meridiano do pulmão", "intestino grosso", "estômago", "baço", "coração", "intestino delgado", "bexiga", "rins", "pericárdio", "triplo aquecedor", "vesícula biliar", "fígado", "ren mai", "meridiano governador", "meridiano vital", "da mai", "acidente vascular cerebral", "pulso", "resistência periférica", "coeficiente da onda", "saturação do oxigênio", "volume do oxigênio", "pressão do oxigênio", "viscosidade do sangue", "colesterol total", "triglicerídeos", "lipoproteína de alta", "lipoproteína de baixa", "gordura neutra", "complexo imunológico", "hormona beta", "proteína de resposta", "fibrinogênio", "taxa de sedimentação", "barreira tecidual", "células imunitárias", "molécula imunitária", "imunitário celular", "imunidade humoral", "vergonha", "culpa", "apatia", "dor", "medo", "desejo", "raiva", "orgulho", "coragem", "neutralidade", "vontade", "aceitação", "razão", "amor", "alegria", "paz", "iluminismo", "volume maré", "volume inspiratório", "capacidade residual", "volume residual", "fosfolipídico", "esfingolípide", "esfingomielina", "lecitina", "fosfolípide cerebral", "lipossômico", "ácidos gordos saturados", "ácidos gordos não saturados", "ácidos gordos essenciais", "triglicéridos"
+    ]
+    return any(term in name_lower for term in valid_terms)
 
 def names_are_similar(a: str, b: str, threshold: float = 0.8) -> bool:
-    """Verifica similaridade entre nomes."""
     return SequenceMatcher(None, normalize_name(a), normalize_name(b)).ratio() > threshold
 
 def normalize_name(name: str) -> str:
-    """Normaliza nome para deduplicação."""
     return re.sub(r'\s+', ' ', name.lower().replace("(", "").replace(")", "").strip())
 
 # Função principal de extração
-def extract_parameters_from_pdf(pdf_path: str) -> tuple[Dict[str, Dict[str, float]], int]:
+def extract_parameters_from_pdf(pdf_path: str) -> Dict[str, Dict[str, float]]:
     parameters = {}
     seen = set()
     buffer = ""
-    total_lines = 0  # Contador de linhas processadas
 
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
             if not text:
                 continue
-            page_lines = text.split("\n")
-            total_lines += len(page_lines)
-            for line in page_lines:
+            lines = text.split("\n")
+            for line in lines:
                 line = clean_text(line)
                 if not line:
                     continue
@@ -69,15 +66,23 @@ def extract_parameters_from_pdf(pdf_path: str) -> tuple[Dict[str, Dict[str, floa
                     continue
 
                 # Regex non-greedy para nome curto antes do range
-                pattern = r"([A-Za-z\sKATEX_INLINE_OPEN/)]{5,40}?)\s*(\d+[.,]\d+)\s*-\s*(\d+[.,]\d+)\s*(\d+[.,]\d+)"
+                pattern = r"([A-Za-z\sKATEX_INLINE_OPEN/)]{10,60}?)\s*(\d+[.,]\d+)\s*-\s*(\d+[.,]\d+)\s*(\d+[.,]\d+)"
                 match = re.search(pattern, line)
                 if match:
                     raw_name, min_str, max_str, val_str = match.groups()
                     name = clean_text(buffer + " " + raw_name).strip()
                     if is_valid_name(name):
                         norm_name = normalize_name(name)
-                        # Verifica se similar a existente; se sim, pula ou mescla
-                        if any(names_are_similar(norm_name, s) for s in seen):
+                        # Mescla se similar a existente (mantém o nome mais longo)
+                        for existing in list(parameters.keys()):
+                            if names_are_similar(name, existing):
+                                if len(name) > len(existing):
+                                    del parameters[existing]
+                                    seen.remove(normalize_name(existing))
+                                else:
+                                    name = existing  # Mantém o existente se mais longo
+                                break
+                        if norm_name in seen:
                             continue
                         seen.add(norm_name)
                         min_val = float(min_str.replace(",", "."))
@@ -88,11 +93,14 @@ def extract_parameters_from_pdf(pdf_path: str) -> tuple[Dict[str, Dict[str, floa
                     buffer = ""  # Reset após match
                 else:
                     # Acumula apenas se curto e válido
-                    if len(line) < 50 and is_valid_name(line):
+                    if len(buffer + " " + line) < 40 and is_valid_name(line):
                         buffer += " " + line
+                    else:
+                        buffer = ""  # Reset se exceder limite
 
-    return parameters, total_lines
-# Validação
+    return parameters
+
+# Validação (com tolerância para bordas exatas)
 def validate_parameters(parameters: Dict[str, Dict[str, float]]) -> List[Dict[str, any]]:
     anomalies = []
     for name, data in parameters.items():
