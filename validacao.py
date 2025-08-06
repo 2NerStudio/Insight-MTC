@@ -17,51 +17,66 @@ def extract_numbers(text: str) -> List[float]:
     return [float(m.replace(",", ".")) for m in matches]
 
 def is_valid_name(name: str) -> bool:
-    """Verifica se é um nome válido (não é cabeçalho ou vazio)."""
+    """Verifica se é um nome válido (mínimo 10 chars alfabéticos, não cabeçalho)."""
     name_lower = name.lower()
-    invalid_keywords = ["intervalo normal", "valor de medição real", "resultado do teste", "item de teste"]
-    return bool(name) and not any(kw in name_lower for kw in invalid_keywords) and re.search(r'[a-zA-Z]', name)
+    invalid_keywords = ["intervalo normal", "valor de medição", "resultado do teste", "item de teste", "conselho de peritos", "real"]
+    if len(re.sub(r'[^a-zA-Z]', '', name)) < 10 or any(kw in name_lower for kw in invalid_keywords):
+        return False
+    # Evita nomes cortados (ex: termina com preposição curta)
+    if name_lower.endswith((" de", " do", " da", " ncia", " o")):
+        return False
+    return True
 
-# Função principal de extração (nova abordagem: texto bruto + regex)
+def normalize_name(name: str) -> str:
+    """Normaliza nome para deduplicação (lowercase, remove parênteses extras)."""
+    return re.sub(r'\s+', ' ', name.lower().replace("(", "").replace(")", "").strip())
+
+# Função principal de extração (ajustada: por linha + regex melhorada)
 def extract_parameters_from_pdf(pdf_path: str) -> Dict[str, Dict[str, float]]:
     """
-    Extrai parâmetros usando texto bruto e regex para maior robustez.
-    Padrão: "Nome min - max valor" ou variações.
-    Retorna: {"Nome": {"min": float, "max": float, "valor": float}}
+    Extrai parâmetros processando texto linha por linha com regex aprimorada.
+    Retorna: {"Nome Completo": {"min": float, "max": float, "valor": float}}
     """
     parameters = {}
-    seen = set()  # Evita duplicatas
+    seen = set()  # Deduplica por nome normalizado
+    buffer = ""  # Acumula texto para nomes multi-linha
 
     with pdfplumber.open(pdf_path) as pdf:
-        full_text = ""
         for page in pdf.pages:
-            full_text += clean_text(page.extract_text()) + " "
-
-        # Regex para capturar linhas como "Nome min - max valor"
-        pattern = r"([A-Za-z\sKATEX_INLINE_OPENKATEX_INLINE_CLOSE/]+?)\s*(\d+[.,]?\d*)\s*-\s*(\d+[.,]?\d*)\s*(\d+[.,]?\d*)"
-        matches = re.findall(pattern, full_text)
-
-        for match in matches:
-            raw_name, min_str, max_str, val_str = match
-            name = clean_text(raw_name).strip()
-            if not is_valid_name(name) or name in seen:
+            text = page.extract_text()
+            if not text:
                 continue
-
-            try:
-                min_val = float(min_str.replace(",", "."))
-                max_val = float(max_str.replace(",", "."))
-                val = float(val_str.replace(",", "."))
-                if min_val >= max_val:  # Range inválido
+            lines = text.split("\n")
+            for line in lines:
+                line = clean_text(line)
+                if not line:
                     continue
-            except ValueError:
-                continue
 
-            seen.add(name)
-            parameters[name] = {"min": min_val, "max": max_val, "valor": val}
+                # Regex: Captura nome (greedy, >=10 chars), seguido de min - max valor
+                pattern = r"([A-Za-z\sKATEX_INLINE_OPEN/)]{10,})\s*(\d+[.,]\d+)\s*-\s*(\d+[.,]\d+)\s*(\d+[.,]\d+)"
+                match = re.search(pattern, line)
+                if match:
+                    raw_name, min_str, max_str, val_str = match.groups()
+                    name = clean_text(buffer + " " + raw_name).strip()
+                    if is_valid_name(name):
+                        norm_name = normalize_name(name)
+                        if norm_name in seen:
+                            continue
+                        seen.add(norm_name)
+                        min_val = float(min_str.replace(",", "."))
+                        max_val = float(max_str.replace(",", "."))
+                        val = float(val_str.replace(",", "."))
+                        if min_val < max_val:
+                            parameters[name] = {"min": min_val, "max": max_val, "valor": val}
+                    buffer = ""  # Reseta após match
+                else:
+                    # Acumula em buffer se for texto potencial (não numérico)
+                    if is_valid_name(line):
+                        buffer += " " + line
 
     return parameters
 
-# Validação
+# Validação (ajustada para ignorar se valor == min ou max exatamente, se for borda)
 def validate_parameters(parameters: Dict[str, Dict[str, float]]) -> List[Dict[str, any]]:
     """Retorna lista de anomalias."""
     anomalies = []
@@ -69,20 +84,22 @@ def validate_parameters(parameters: Dict[str, Dict[str, float]]) -> List[Dict[st
         val = data.get("valor")
         min_val = data.get("min")
         max_val = data.get("max")
-        if val is None or min_val is None or max_val is None or min_val > max_val:
+        if val is None or min_val is None or max_val is None or min_val >= max_val:
             continue
-        if not (min_val <= val <= max_val):
-            status = "Abaixo" if val < min_val else "Acima"
-            anomalies.append({
-                "item": name,
-                "valor_real": val,
-                "status": status,
-                "normal_min": min_val,
-                "normal_max": max_val,
-            })
+        # Tolerância para bordas (ex: se val == max, considera normal)
+        if min_val < val < max_val:
+            continue
+        status = "Abaixo" if val < min_val else "Acima"
+        anomalies.append({
+            "item": name,
+            "valor_real": val,
+            "status": status,
+            "normal_min": min_val,
+            "normal_max": max_val,
+        })
     return anomalies
 
-# Geração de relatório DOCX
+# Geração de relatório DOCX (inalterada)
 def generate_report(anomalies: List[Dict[str, any]], therapist: str, registry: str, output_path: str) -> None:
     """Gera um DOCX com o relatório de anomalias."""
     doc = Document()
