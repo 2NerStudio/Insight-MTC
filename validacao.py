@@ -46,18 +46,20 @@ def normalize_name(name: str) -> str:
     return re.sub(r'\s+', ' ', name.lower().replace("(", "").replace(")", "").strip())
 
 # Função principal de extração
-def extract_parameters_from_pdf(pdf_path: str) -> Dict[str, Dict[str, float]]:
+def extract_parameters_from_pdf(pdf_path: str) -> tuple[Dict[str, Dict[str, float]], int]:
     parameters = {}
     seen = set()
     buffer = ""
+    total_lines = 0  # Contador de linhas processadas
 
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
             if not text:
                 continue
-            lines = text.split("\n")
-            for line in lines:
+            page_lines = text.split("\n")
+            total_lines += len(page_lines)
+            for line in page_lines:
                 line = clean_text(line)
                 if not line:
                     continue
@@ -89,8 +91,7 @@ def extract_parameters_from_pdf(pdf_path: str) -> Dict[str, Dict[str, float]]:
                     if len(line) < 50 and is_valid_name(line):
                         buffer += " " + line
 
-    return parameters
-
+    return parameters, total_lines
 # Validação
 def validate_parameters(parameters: Dict[str, Dict[str, float]]) -> List[Dict[str, any]]:
     anomalies = []

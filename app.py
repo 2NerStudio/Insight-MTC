@@ -106,12 +106,13 @@ if submit:
                     subprocess.run(["libreoffice", "--headless", "--convert-to", "pdf", input_path, "--outdir", tempfile.gettempdir()], check=True)
 
                 # Extrai e valida
-                parameters = extract_parameters_from_pdf(pdf_path)
+                parameters, total_lines = extract_parameters_from_pdf(pdf_path)
 
                 # Debug: Mostra parâmetros extraídos e stats
                 with st.expander("🛠 Debug: Parâmetros Extraídos (para verificação)"):
                     if parameters:
-                        st.info(f"📊 {len(parameters)} parâmetros únicos extraídos. (Descartados: estimado ~{len(lines) - len(parameters)} por invalidade).")
+                        discarded_est = total_lines - len(parameters)
+                        st.info(f"📊 {len(parameters)} parâmetros únicos extraídos. (Linhas processadas: {total_lines}, estimado descartados ~{discarded_est}).")
                         for name in sorted(parameters.keys()):
                             data = parameters[name]
                             st.markdown(f"- **{name}**: Valor {data['valor']:.3f} (Range: {data['min']}–{data['max']})")
